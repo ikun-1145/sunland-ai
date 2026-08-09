@@ -1,0 +1,47 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { SupabaseRepository } from "../src/supabaseRepository";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe("Supabase repository failure mapping", () => {
+  it("distinguishes idempotency-key reuse from a revision retry", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(
+      JSON.stringify({ message: "turn_id_reused" }),
+      { status: 409 },
+    )));
+    const repository = new SupabaseRepository("https://database.example", "service-secret");
+
+    await expect(repository.commitTurn({
+      userId: "user-a",
+      conversationId: "conversation-a",
+      turnId: "turn-a",
+      expectedRevision: 1,
+      requestHash: "a".repeat(64),
+      knowledge: [],
+      memory: [],
+      context: { schemaVersion: 1, version: 0, recentTurns: [] },
+      response: {
+        conversationId: "conversation-a",
+        turnId: "turn-a",
+        response: "answer",
+        stateRevision: 2,
+      },
+    })).rejects.toMatchObject({ status: 409, code: "turn_id_reused" });
+  });
+
+  it("deletes only expired idempotency rows without logging secrets", async () => {
+    const request = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", request);
+    const repository = new SupabaseRepository("https://database.example", "service-secret");
+    await repository.deleteExpiredTurnResults(new Date("2026-08-08T03:17:00.000Z"));
+
+    const [url, init] = request.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toContain("/sunland_ai_turn_results?expires_at=lt.");
+    expect(url).not.toContain("service-secret");
+    expect(init.method).toBe("DELETE");
+    expect(new Headers(init.headers).get("authorization")).toBe("Bearer service-secret");
+  });
+});

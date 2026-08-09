@@ -1,0 +1,66 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "sunland-ai-core",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "ai-core.sunland.dev",
+      "custom_domain": true
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "vars": {
+    "APP_JWT_ISSUER": "sunland-api",
+    "CORS_ORIGINS": "https://sunland.dev,https://www.sunland.dev",
+    "CORE_VERSION": "0.1.0"
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "USER_BRAINS",
+        "class_name": "SunlandUserBrain"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["SunlandUserBrain"]
+    }
+  ],
+  "triggers": {
+    "crons": ["17 3 * * *"]
+  },
+  "env": {
+    "staging": {
+      "name": "sunland-ai-core-staging",
+      "routes": [
+        {
+          "pattern": "ai-core-staging.sunland.dev",
+          "custom_domain": true
+        }
+      ],
+      "vars": {
+        "APP_JWT_ISSUER": "sunland-api",
+        "CORS_ORIGINS": "https://sunland.dev,https://www.sunland.dev,http://localhost:8788,http://localhost:8000",
+        "CORE_VERSION": "0.1.0"
+      },
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "USER_BRAINS",
+            "class_name": "SunlandUserBrain"
+          }
+        ]
+      },
+      "triggers": {
+        "crons": ["17 3 * * *"]
+      }
+    }
+  }
+}
