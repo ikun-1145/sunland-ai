@@ -88,7 +88,14 @@ const SELF_REFERENCES = Object.freeze([
   }),
 ]);
 
-const RELATION_CONCEPT_IDS = new Set(["is-a", "can", "has", "means"]);
+const RELATION_CONCEPT_IDS = new Set([
+  "is-a",
+  "can",
+  "has",
+  "likes",
+  "located-in",
+  "means",
+]);
 const NAME_REJECT_VALUES = new Set(["什么", "什么名字", "谁", "吗"]);
 const ASCII_WORD_CHARACTER = /[a-z0-9]/iu;
 const ENTITY_EDGE_CHARACTER = /[\s,.;:!?'"()[\]~]/u;

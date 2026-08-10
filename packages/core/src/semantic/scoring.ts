@@ -36,6 +36,7 @@ export const SEMANTIC_SCORING = Object.freeze({
     subjectBonus: confidence(0.12),
     objectBonus: confidence(0.12),
     queryShapeBonus: confidence(0.12),
+    repeatedQueryBonus: confidence(0.04),
     statementShapeBonus: confidence(0.14),
     missingSlotPenalty: confidence(0.16),
     sideEffectPenalty: confidence(0.05),

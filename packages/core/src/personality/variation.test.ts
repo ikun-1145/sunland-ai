@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { pickBySeed } from "./variation";
+import {
+  assistantOpeningKey,
+  pickBySeed,
+  pickNonRepeatingText,
+} from "./variation";
 
 describe("pickBySeed", () => {
   const pool = ["a", "b", "c", "d"] as const;
@@ -23,5 +27,16 @@ describe("pickBySeed", () => {
 
   it("throws for an empty pool", () => {
     expect(() => pickBySeed([], "seed")).toThrow();
+  });
+
+  it("selects another opening when the deterministic first choice was recent", () => {
+    const items = ["哈哈，这个有意思。", "确实有点离谱。", "这展开没想到。"];
+    const first = pickNonRepeatingText(items, "same-seed", []);
+    const second = pickNonRepeatingText(items, "same-seed", [
+      assistantOpeningKey(first),
+    ]);
+
+    expect(second).not.toBe(first);
+    expect(assistantOpeningKey(first)).toMatch(/^opening-[a-z0-9]+$/u);
   });
 });

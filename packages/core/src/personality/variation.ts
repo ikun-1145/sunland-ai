@@ -7,13 +7,32 @@
  * (e.g. the query's subject+relation). The SAME input always renders the
  * SAME way (testable, explainable), while DIFFERENT inputs get variety.
  */
+import { hashString, stableUnitInterval } from "@/utils/deterministic";
 
-function hashString(value: string): number {
-  let hash = 0;
-  for (let i = 0; i < value.length; i += 1) {
-    hash = (hash * 31 + value.charCodeAt(i)) | 0;
+export { hashString, stableUnitInterval };
+
+export function assistantOpeningKey(value: string): string {
+  const normalized = value.trim().replace(/\s+/gu, " ");
+  const [opening = normalized] = normalized.split(/[，。！？!?：:\n]/u, 1);
+  return `opening-${hashString(opening.slice(0, 16)).toString(36)}`;
+}
+
+export function pickNonRepeatingText(
+  items: readonly string[],
+  seed: string,
+  recentOpeningKeys: readonly string[],
+): string {
+  if (items.length === 0) {
+    throw new Error("pickNonRepeatingText: `items` must not be empty");
   }
-  return Math.abs(hash);
+  const start = hashString(seed) % items.length;
+  for (let offset = 0; offset < items.length; offset += 1) {
+    const candidate = items[(start + offset) % items.length]!;
+    if (!recentOpeningKeys.includes(assistantOpeningKey(candidate))) {
+      return candidate;
+    }
+  }
+  return items[start]!;
 }
 
 /** Deterministically pick one item from `items`, keyed by `seed`. */

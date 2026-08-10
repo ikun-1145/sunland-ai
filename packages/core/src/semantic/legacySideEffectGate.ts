@@ -154,6 +154,29 @@ function acceptedCandidates(
     : Object.freeze([]);
 }
 
+function isAcceptedReadOnlyQuestionRepair(
+  decision: UnderstandingDecision,
+  legacyResult: ParseResult,
+  analysis: SemanticAnalysis,
+): boolean {
+  if (
+    legacyResult.type !== "statement" ||
+    decision.kind !== "accept" ||
+    analysis.extraction.questionCues.length === 0
+  ) {
+    return false;
+  }
+
+  const candidate = decision.selectedCandidate;
+  return (
+    candidate.producer === "relation-pattern" &&
+    candidate.sideEffect === "none" &&
+    candidate.missingSlots.length === 0 &&
+    candidate.result?.type === "query" &&
+    candidate.evidence.some(({ kind }) => kind === "question-cue")
+  );
+}
+
 function distinctCompleteSideEffects(
   analysis: SemanticAnalysis,
 ): ReadonlySet<string> {
@@ -222,6 +245,23 @@ export function evaluateLegacySideEffectFallback(
   }
   if (semanticDecision.kind !== "accept") {
     return block("semantic-side-effect-not-accepted");
+  }
+
+  // A bounded relation-pattern query may repair a Legacy statement matcher
+  // that captured a question word as its object (for example "猫在哪").
+  // Continuing here would only block a read; it must never admit the Legacy
+  // write, so hand control back to the read-only Semantic adapter instead.
+  if (
+    isAcceptedReadOnlyQuestionRepair(
+      semanticDecision,
+      legacyResult,
+      analysis,
+    )
+  ) {
+    return Object.freeze({
+      kind: "allow-passive-legacy",
+      reason: "not-a-side-effect",
+    });
   }
 
   if (analysis.extraction.negationCues.length > 0) {

@@ -194,7 +194,7 @@ export const SEMANTIC_LEXICON: readonly SemanticLexiconEntry[] = Object.freeze(
     {
       id: "can",
       canonical: "会",
-      aliases: ["会", "能", "能够"],
+      aliases: ["会", "能", "能够", "可以"],
       category: "relation",
       baseWeight: 0.78,
       constraints: {
@@ -207,6 +207,30 @@ export const SEMANTIC_LEXICON: readonly SemanticLexiconEntry[] = Object.freeze(
       id: "has",
       canonical: "有",
       aliases: ["有", "拥有", "具备"],
+      category: "relation",
+      baseWeight: 0.8,
+      constraints: {
+        matchMode: "infix",
+        allowedCandidateKinds: ["statement", "query"],
+      },
+      sideEffectSafe: true,
+    },
+    {
+      id: "likes",
+      canonical: "喜欢",
+      aliases: ["喜欢", "喜爱"],
+      category: "relation",
+      baseWeight: 0.82,
+      constraints: {
+        matchMode: "infix",
+        allowedCandidateKinds: ["statement", "query"],
+      },
+      sideEffectSafe: true,
+    },
+    {
+      id: "located-in",
+      canonical: "在",
+      aliases: ["位于", "在"],
       category: "relation",
       baseWeight: 0.8,
       constraints: {

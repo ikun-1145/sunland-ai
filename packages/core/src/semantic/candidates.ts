@@ -1,4 +1,4 @@
-import type { ParseResult } from "@/types";
+import type { CommunityResolution, ParseResult } from "@/types";
 import { extractSemanticFeatures } from "./extract";
 import { normalizeSemanticInput } from "./normalize";
 import { normalizeSemanticContext } from "./context";
@@ -20,6 +20,7 @@ import type {
   SemanticDiagnostic,
   SemanticEntity,
 } from "./types";
+import { resolveCommunityLanguage } from "@/community";
 
 function resultInterpretationKey(result: ParseResult | null): string {
   if (result === null) {
@@ -232,9 +233,74 @@ function createDiagnostics(
   return Object.freeze(diagnostics);
 }
 
+function normalizedValue(value: string): string {
+  return value.trim().replace(/\s+/gu, " ").toLocaleLowerCase("und");
+}
+
+function canonicalQueryRelation(
+  extraction: SemanticAnalysis["extraction"],
+  relation: string,
+): string {
+  const hasIsAConcept = extraction.relations.some(
+    ({ conceptId }) => conceptId === "is-a",
+  );
+  return hasIsAConcept && (relation === "是" || relation === "属于")
+    ? "属于"
+    : normalizedValue(relation);
+}
+
+function supersededFramedLegacyCandidateIds(
+  candidates: readonly SemanticCandidate[],
+  extraction: SemanticAnalysis["extraction"],
+): ReadonlySet<string> {
+  const semanticRepairs = candidates.filter((candidate) => {
+    return (
+      candidate.producer === "relation-pattern" &&
+      candidate.sideEffect === "none" &&
+      candidate.missingSlots.length === 0 &&
+      candidate.result?.type === "query" &&
+      candidate.evidence.some(
+        ({ kind, key }) =>
+          kind === "structural" && key === "query:subject-framing",
+      )
+    );
+  });
+
+  return new Set(
+    candidates
+      .filter(
+        (candidate) =>
+          candidate.producer === "legacy-regex" &&
+          candidate.result?.type === "query",
+      )
+      .filter((legacy) => {
+        const legacyResult = legacy.result;
+        if (legacyResult?.type !== "query") return false;
+        return semanticRepairs.some((repair) => {
+          if (repair.result?.type !== "query") return false;
+          return (
+            repair.result.kind === legacyResult.kind &&
+            canonicalQueryRelation(
+              extraction,
+              repair.result.relation,
+            ) ===
+              canonicalQueryRelation(
+                extraction,
+                legacyResult.relation,
+              ) &&
+            normalizedValue(repair.result.object ?? "") ===
+              normalizedValue(legacyResult.object ?? "")
+          );
+        });
+      })
+      .map(({ id }) => id),
+  );
+}
+
 export function analyzeSemanticInput(
   raw: string,
   context?: SemanticContext,
+  resolvedCommunity?: CommunityResolution,
 ): SemanticAnalysis {
   const input = normalizeSemanticInput(raw);
   const extraction = extractSemanticFeatures(input);
@@ -243,6 +309,13 @@ export function analyzeSemanticInput(
     ...produceLexiconCandidates(extraction),
     ...produceRelationPatternCandidates(extraction),
   ];
+  const supersededFramedLegacy = supersededFramedLegacyCandidateIds(
+    baseCandidates,
+    extraction,
+  );
+  const eligibleBaseCandidates = baseCandidates.filter(
+    ({ id }) => !supersededFramedLegacy.has(id),
+  );
   const normalizedContext =
     context === undefined ? undefined : normalizeSemanticContext(context);
   const contextProduction =
@@ -253,12 +326,12 @@ export function analyzeSemanticInput(
         })
       : produceContextCandidates(
           extraction,
-          baseCandidates,
+          eligibleBaseCandidates,
           normalizedContext,
         );
   const superseded = new Set(contextProduction.supersededCandidateIds);
   const generated = [
-    ...baseCandidates.filter(({ id }) => !superseded.has(id)),
+    ...eligibleBaseCandidates.filter(({ id }) => !superseded.has(id)),
     ...contextProduction.candidates,
   ];
   const candidates = sortSemanticCandidates(
@@ -273,6 +346,10 @@ export function analyzeSemanticInput(
       raw,
       candidates,
       normalizedContext,
+    ),
+    community: resolvedCommunity ?? resolveCommunityLanguage(
+      raw,
+      normalizedContext?.conversationState?.communityContext,
     ),
   });
 }

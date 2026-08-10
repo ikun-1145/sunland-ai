@@ -14,6 +14,7 @@
  */
 import type {
   ClarificationPlan,
+  DialogueTurnContext,
   IdentityAspect,
   KnowledgeRecord,
   MemoryKey,
@@ -25,7 +26,16 @@ import type {
 } from "@/types";
 import { MemoryKeys } from "@/types";
 import { compose } from "./textCompose";
-import { pickBySeed } from "./variation";
+import {
+  pickBySeed,
+  pickNonRepeatingText,
+} from "./variation";
+import {
+  chooseFurryExpression,
+  type FurryExpressionScene,
+} from "./frostPersona";
+import { renderFrostCommunityDialogue } from "./communityDialogue";
+import { renderFrostSocialDialogue } from "./socialDialogue";
 import {
   CAPABILITY_CLOSERS,
   CAPABILITY_OPENERS,
@@ -61,7 +71,7 @@ const FROST_ACCENT_OPTIONS: readonly string[] = [
   "",
   "",
   "",
-  "🐾",
+  "",
   "✨",
 ];
 
@@ -78,9 +88,55 @@ function withOptionalAccent(
   return accent.length > 0 ? `${text} ${accent}` : text;
 }
 
-function renderReasoningResult(result: ReasoningResult, plan: ResponsePlan): string {
+function emotionAcknowledgement(turn: DialogueTurnContext): string {
+  if (!turn.plan.acknowledgeEmotion) return "";
+  switch (turn.understanding.userMood) {
+    case "frustrated":
+      return "这事是真会磨人。";
+    case "sad":
+      return "这一下挺扎心的。";
+    case "tired":
+      return "今天这是被榨干了啊。";
+    case "angry":
+      return "这事确实很容易让人上火。";
+    case "anxious":
+      return "先别急，我们一点点理。";
+    case "confused":
+      return "卡在这里确实容易越看越乱。";
+    default:
+      return "";
+  }
+}
+
+function varied(
+  turn: DialogueTurnContext,
+  scene: string,
+  candidates: readonly string[],
+): string {
+  return pickNonRepeatingText(
+    candidates,
+    `${turn.raw}:${scene}:${turn.state.relationship.familiarity}`,
+    turn.state.recentAssistantOpeningKeys,
+  );
+}
+
+function withFurryExpression(
+  turn: DialogueTurnContext,
+  scene: FurryExpressionScene,
+  response: string,
+): string {
+  const expression = chooseFurryExpression(turn, scene);
+  return expression === null ? response : `${response} ${expression}`;
+}
+
+function renderReasoningResult(
+  result: ReasoningResult,
+  plan: ResponsePlan,
+  dialogue?: DialogueTurnContext,
+): string {
   const seed = `${result.query.subject}:${result.query.relation}:${result.query.kind}`;
   const hasAnswer = plan.mode !== "no-answer";
+  const acknowledgement = dialogue ? emotionAcknowledgement(dialogue) : "";
 
   // The DECISION to hedge is the Response Planner's (`plan.isUncertain`,
   // based on confidence); only the WORDING of the hedge is Frost's to pick.
@@ -92,12 +148,196 @@ function renderReasoningResult(result: ReasoningResult, plan: ResponsePlan): str
   // rewrites it.
   if (hasAnswer) {
     const opener = pickBySeed(REASONING_ANSWER_OPENERS, seed);
-    return `${opener}${plan.explanation}${hedge ?? ""}`;
+    return `${acknowledgement}${opener}${plan.explanation}${hedge ?? ""}`;
+  }
+
+  if (dialogue?.understanding.conversationMode === "technical") {
+    const invitation = dialogue.plan.shouldAskFollowUp
+      ? "把报错信息和关键代码贴过来吧，密钥等敏感内容记得遮住。"
+      : "需要继续排查时，补上报错信息和关键代码，敏感内容记得遮住。";
+    return `${acknowledgement}${plan.explanation}${invitation}`;
   }
 
   const opener = pickBySeed(REASONING_NO_ANSWER_OPENERS, seed);
   const closer = pickBySeed(REASONING_NO_ANSWER_CLOSERS, `${seed}:closer`);
-  return `${opener}${plan.explanation}${closer}`;
+  return `${acknowledgement}${opener}${plan.explanation}${closer}`;
+}
+
+function renderDialogue(turn: DialogueTurnContext): string {
+  const { intent, topic, userMood, conversationMode } = turn.understanding;
+  const followUp = turn.plan.shouldAskFollowUp;
+  const socialResponse = renderFrostSocialDialogue(turn);
+  if (socialResponse !== null) return socialResponse;
+  const communityResponse = renderFrostCommunityDialogue(turn);
+  if (communityResponse !== null) return communityResponse;
+
+  switch (intent) {
+    case "greeting": {
+      if (/^(?:早|早安|早上好)/u.test(turn.raw.trim())) {
+        return turn.rememberedName
+          ? `早，${turn.rememberedName}。脑子开机了吗？`
+          : "早～脑子开机了吗？";
+      }
+      if (turn.state.relationship.casualness >= 0.2) {
+        const familiarName = turn.rememberedName
+          ? `，${turn.rememberedName}`
+          : "";
+        return `哟${familiarName}，又碰面了。`;
+      }
+      const name = turn.rememberedName ? `，${turn.rememberedName}` : "";
+      return `嗨${name}，我是霜蓝，住在 Sunland AI 里。今天见到你挺好。`;
+    }
+    case "thanks":
+      return varied(turn, "thanks", [
+        "不客气，理顺了就好。",
+        "小事，接着往下走吧。",
+        "好说，这下顺了。",
+      ]);
+    case "farewell":
+      return /晚安|good\s*night/iu.test(turn.raw)
+        ? varied(turn, "goodnight", [
+            "晚安，快去睡吧 🌙",
+            "晚安啦，今晚睡个踏实觉。",
+            "好梦。今天就先到这儿 🌙",
+          ])
+        : varied(turn, "farewell", [
+            "好，那先聊到这儿。下次见。",
+            "行，回头接着聊。",
+            "先撤啦，下次见。",
+          ]);
+    case "reaction": {
+      if (/^寄[呀啊哦～~！!。,.，\s]*$/u.test(turn.raw.trim())) return "这下寄了。";
+      if (/^[?？]+$/u.test(turn.raw.trim())) {
+        return turn.state.recentAssistantOpeningKeys.length > 0
+          ? "等等，我刚刚那句是不是说歪了？"
+          : "这个问号很有压迫感。";
+      }
+      if (/^(?:嗯+|哦+)/u.test(turn.raw.trim())) return "嗯，我在。";
+      if (/^(?:行|好|好的|可以|成|懂了|知道了|收到)/u.test(turn.raw.trim())) {
+        return varied(turn, "acknowledgement", [
+          "那就这么整 👀",
+          "行，就按这个来。",
+          "好，定了。",
+        ]);
+      }
+      if (/你真厉害|太强了|牛啊|真聪明|干得漂亮|厉害了/u.test(turn.raw)) {
+        return varied(turn, "praise", [
+          "哎，这句夸奖我收下了 😌",
+          "被你这么一说，我有点得意了。",
+          "好，这句我就不谦虚了 😂",
+        ]);
+      }
+      return varied(turn, "laughter", [
+        "你笑成这样，我开始好奇了 😂",
+        "哈哈哈，看来这事真的很有节目效果。",
+        "这串笑声已经自带剧情了。",
+      ]);
+    }
+    case "emotional_share":
+      if (userMood === "happy" || userMood === "excited") {
+        const success = conversationMode === "technical" && /修好|修完|搞定/u.test(turn.raw)
+          ? "终于逮住它了 😂"
+          : varied(turn, "celebration", [
+              "这下是真的可以开心一下了 😂",
+              "漂亮，这口气总算顺下来了。",
+              "好耶，这一下值得记一笔 ✨",
+            ]);
+        return withFurryExpression(turn, "celebration", success);
+      }
+      if (topic === "exam") {
+        return followUp
+          ? "这一下确实挺泄气的。是哪一科最扎心？"
+          : "一次没考好会难受，但先别急着拿它给自己下结论。";
+      }
+      if (userMood === "tired") {
+        return varied(turn, "tired", [
+          "今天这是被榨干了啊 😭",
+          "看样子今天真没少折腾你。",
+          "电量已经见底了，先喘口气。",
+        ]);
+      }
+      if (userMood === "frustrated" && conversationMode === "technical") {
+        return followUp
+          ? "这 bug 是真会折腾人。卡在哪一步？"
+          : "这 bug 是真会折腾人，先把最可疑的那段拎出来。";
+      }
+      if (userMood === "frustrated") {
+        const response = /无语/u.test(turn.raw)
+          ? "这是给你整得一句话都不想说了啊 😂"
+          : followUp
+            ? "怎么啦，又碰上什么糟心事了？"
+            : "这事是真够烦的，先让它在旁边晾一会儿。";
+        return /无语/u.test(turn.raw)
+          ? withFurryExpression(turn, "deadpan", response)
+          : response;
+      }
+      return followUp
+        ? `${emotionAcknowledgement(turn)}发生什么了？`
+        : `${emotionAcknowledgement(turn)}先缓一缓也没关系。`;
+    case "casual_chat":
+      if (/刚起床|刚醒|睡醒/u.test(turn.raw)) {
+        return followUp
+          ? varied(turn, "wake", [
+              "刚醒呀 😂 脑子开机了吗？",
+              "早～现在还是迷迷糊糊状态吗？",
+              "刚从被窝里加载出来？👀",
+            ])
+          : "刚醒呀 😂 先缓缓神。";
+      }
+      if (topic === "meal") {
+        if (/火锅/u.test(turn.raw)) {
+          return varied(turn, "hotpot", [
+            "火锅很会选，光听着就有点香了 😂",
+            "火锅啊，难怪这顿吃得有存在感。",
+            "可以，火锅这答案很有分量 😂",
+          ]);
+        }
+        return followUp
+          ? varied(turn, "meal-follow-up", [
+              "吃完啦～今天吃了啥？👀",
+              "饱了？这顿吃的什么？",
+              "饭后报道收到，菜单呢？😂",
+            ])
+          : "吃饱就好，这一轮算是圆满收工。";
+      }
+      return followUp
+        ? varied(turn, "casual-follow-up", [
+            "这个展开有点意思，后来呢？",
+            "嗯，这段我接住了。然后呢？",
+            "听着呢，后面还有吗？",
+          ])
+        : varied(turn, "casual-ending", [
+            "嗯，这段小日常我接住了。",
+            "懂，这种小事也挺有存在感。",
+            "好，这一拍算是落稳了。",
+          ]);
+    case "storytelling":
+      return followUp
+        ? varied(turn, "story", [
+            "我听着呢，后来发生了什么？",
+            "这段有后续吧？接着讲。",
+            "好，剧情到这儿了——然后呢？",
+          ])
+        : "这段我接住了，你慢慢说。";
+    case "command":
+      if (conversationMode === "technical") {
+        return `${emotionAcknowledgement(turn)}先看报错、复现步骤和关键代码，敏感内容遮一下。`;
+      }
+      return followUp
+        ? "目标和手头已有的信息发来，直接开整。"
+        : "具体要求发来，直接开始。";
+    case "opinion_request":
+      if (/ui|界面|按钮|页面/iu.test(turn.raw) && /丑|难看|灾难|土/u.test(turn.raw)) {
+        return "听这评价，已经不是小瑕疵，是整体在和审美打架了 😂";
+      }
+      return "这事我有点倾向，不过先把事实和取舍分开看。";
+    case "question":
+      return conversationMode === "technical"
+        ? "这个得结合上下文判断。把报错和相关配置贴出来，敏感值遮住。"
+        : "这句还缺一点上下文，补两句背景吧。";
+    case "unknown":
+      return "这句话我还没完全接住。换种说法，或者多给我一点上下文吧。";
+  }
 }
 
 function renderLearned(record: KnowledgeRecord): string {
@@ -301,7 +541,9 @@ export const FrostPersonality: PersonalityProfile = {
   respond(context: ResponseContext): string {
     switch (context.kind) {
       case "reasoning-result":
-        return renderReasoningResult(context.result, context.plan);
+        return renderReasoningResult(context.result, context.plan, context.dialogue);
+      case "dialogue":
+        return renderDialogue(context.turn);
       case "clarification":
         return renderClarification(context.plan);
       case "learned":

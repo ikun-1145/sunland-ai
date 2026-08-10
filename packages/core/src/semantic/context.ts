@@ -13,6 +13,8 @@ import type {
   SemanticTurnSummary,
   UnderstandingDecision,
 } from "./types";
+import { normalizeConversationState } from "@/dialogue/conversationState";
+import type { ConversationState } from "@/types";
 
 export type SemanticContextMode = "off" | "enabled";
 
@@ -216,11 +218,15 @@ export function normalizeSemanticContext(value: unknown): SemanticContext {
       .filter((turn): turn is SemanticTurnSummary => turn !== null)
       .slice(-SEMANTIC_CONTEXT_LIMITS.maximumTurns),
   );
+  const conversationState = normalizeConversationState(
+    value.conversationState,
+  );
 
   return Object.freeze({
     schemaVersion: 1,
     version,
     recentTurns,
+    ...(conversationState === undefined ? {} : { conversationState }),
   });
 }
 
@@ -318,16 +324,19 @@ function summaryForResult(
 
 export interface CreateSemanticContextUpdateOptions {
   readonly context: SemanticContext;
-  readonly decision: UnderstandingDecision;
+  readonly decision: UnderstandingDecision | null;
   readonly executedResult: ParseResult | null;
+  readonly conversationState?: ConversationState;
   readonly turnId: string;
   readonly executionSucceeded: boolean;
   readonly canCommit: boolean;
 }
 
 /**
- * Produces an optimistic update only after an accepted interpretation has
- * actually completed. It never applies or persists the update itself.
+ * Produces an optimistic update only after a turn has completed. Semantic
+ * history still requires an accepted, executed interpretation; a dialogue
+ * turn may update only its bounded conversation summary. This function never
+ * applies or persists the update itself.
  */
 export function createSemanticContextUpdate(
   options: CreateSemanticContextUpdateOptions,
@@ -335,9 +344,7 @@ export function createSemanticContextUpdate(
   const context = normalizeSemanticContext(options.context);
   if (
     !options.canCommit ||
-    !options.executionSucceeded ||
-    options.decision.kind !== "accept" ||
-    options.executedResult === null
+    !options.executionSucceeded
   ) {
     return Object.freeze({
       kind: "none",
@@ -349,18 +356,16 @@ export function createSemanticContextUpdate(
     options.turnId,
     SEMANTIC_CONTEXT_LIMITS.maximumTurnIdLength,
   );
-  if (turnId === null) {
-    return Object.freeze({
-      kind: "none",
-      baseVersion: context.version,
-    });
-  }
-  const summary = summaryForResult(
-    turnId,
-    options.executedResult,
-    options.decision,
+  const summary =
+    turnId !== null &&
+    options.decision?.kind === "accept" &&
+    options.executedResult !== null
+      ? summaryForResult(turnId, options.executedResult, options.decision)
+      : null;
+  const conversationState = normalizeConversationState(
+    options.conversationState,
   );
-  if (summary === null) {
+  if (summary === null && conversationState === undefined) {
     return Object.freeze({
       kind: "none",
       baseVersion: context.version,
@@ -372,10 +377,11 @@ export function createSemanticContextUpdate(
     schemaVersion: 1 as const,
     version: nextVersion,
     recentTurns: Object.freeze(
-      [...context.recentTurns, summary].slice(
+      [...context.recentTurns, ...(summary === null ? [] : [summary])].slice(
         -SEMANTIC_CONTEXT_LIMITS.maximumTurns,
       ),
     ),
+    ...(conversationState === undefined ? {} : { conversationState }),
   });
 
   return Object.freeze({

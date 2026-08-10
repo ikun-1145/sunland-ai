@@ -25,6 +25,7 @@ import type { MemoryKey } from "./memory";
 import type { IdentityAspect, ParseFailure } from "./parser";
 import type { ClarificationPlan, ResponsePlan } from "./planner";
 import type { ReasoningResult } from "./reasoning";
+import type { DialogueTurnContext } from "./dialogue";
 
 /**
  * Every "moment" a chat-facing module may need styled text for. Adding a new
@@ -44,7 +45,14 @@ export type ResponseContext =
    * `plan.showEvidence`/`plan.isUncertain` for FRAMING (which opener/closer,
    * whether to append an uncertainty hedge) — never re-deriving facts.
    */
-  | { readonly kind: "reasoning-result"; readonly result: ReasoningResult; readonly plan: ResponsePlan }
+  | {
+      readonly kind: "reasoning-result";
+      readonly result: ReasoningResult;
+      readonly plan: ResponsePlan;
+      /** Optional turn framing; it may affect tone, never the factual answer. */
+      readonly dialogue?: DialogueTurnContext;
+    }
+  | { readonly kind: "dialogue"; readonly turn: DialogueTurnContext }
   | { readonly kind: "clarification"; readonly plan: ClarificationPlan }
   | { readonly kind: "learned"; readonly record: KnowledgeRecord }
   | { readonly kind: "unknown-input"; readonly failure: ParseFailure }

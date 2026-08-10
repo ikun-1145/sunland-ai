@@ -27,6 +27,8 @@
  */
 import type {
   ClarificationContext,
+  CommunityResolution,
+  DialogueTurnContext,
   IdentityAspect,
   KnowledgeStore,
   MemoryManager,
@@ -52,6 +54,18 @@ import { createMemoryManager, loadMemoryManager, saveMemoryManager } from "@/mem
 import { createParser } from "@/parser";
 import { getPersonality } from "@/personality";
 import { defaultResponsePlanner } from "@/planner";
+import {
+  advanceConversationState,
+  completeConversationState,
+  defaultConversationAnalyzer,
+  defaultDialoguePlanner,
+} from "@/dialogue";
+import {
+  containsFurryExpression,
+  FROST_PERSONA_SPEC,
+} from "@/personality/frostPersona";
+import { assistantOpeningKey } from "@/personality/variation";
+import { containsCommunityLanguage } from "@/community";
 import {
   answerGraphQuery,
   type RelationResolutionEvidence,
@@ -102,7 +116,11 @@ export type {
 } from "@/observation";
 
 export interface SemanticRuntime {
-  analyze(input: string, context?: SemanticContext): SemanticAnalysis;
+  analyze(
+    input: string,
+    context?: SemanticContext,
+    resolvedCommunity?: CommunityResolution,
+  ): SemanticAnalysis;
   plan(
     analysis: SemanticAnalysis,
     policy?: UnderstandingPolicy,
@@ -329,6 +347,98 @@ function relationResolutionOptions(
         ({ producer }) => producer === "context",
       ),
   });
+}
+
+function shouldUseFastDialogue(
+  parsed: ParseResult,
+  turn: DialogueTurnContext,
+): boolean {
+  // Safety-marked utterances must never fall through to a fact-writing parse
+  // or a joke renderer. The dialogue path keeps the input transient while a
+  // host-level dedicated safety layer remains free to intercept it earlier.
+  if (turn.understanding.pragmatics.requiresSafetyHandling) return true;
+  if (
+    turn.understanding.pragmatics.matchedPatterns.length > 0 &&
+    turn.understanding.pragmatics.confidence >= 0.7
+  ) {
+    return (
+      parsed.type !== "statement" ||
+      turn.understanding.pragmatics.communicativeGoal !== "inform"
+    );
+  }
+  if (
+    turn.understanding.community.matches.length > 0 &&
+    turn.understanding.community.confidence >= 0.75
+  ) {
+    return (
+      parsed.type !== "statement" ||
+      turn.understanding.pragmatics.communicativeGoal !== "inform" ||
+      /^(?:我|我的|希望|感觉|准备|周末)|我推|本命|我厨|厨爆|磕|好想|终于|但是|不过|算了/u.test(turn.raw.trim())
+    );
+  }
+
+  if (parsed.type === "intent") {
+    if (
+      parsed.intent === "RememberName" ||
+      parsed.intent === "RecallName" ||
+      parsed.intent === "Identity"
+    ) {
+      return false;
+    }
+    if (parsed.intent === "Greeting") {
+      return turn.understanding.intent === "greeting";
+    }
+    if (parsed.intent === "Thanks") {
+      return turn.understanding.intent === "thanks";
+    }
+    if (parsed.intent === "Farewell") {
+      return turn.understanding.intent === "farewell";
+    }
+    return false;
+  }
+
+  switch (turn.understanding.intent) {
+    case "greeting":
+    case "thanks":
+    case "farewell":
+    case "reaction":
+    case "emotional_share":
+    case "storytelling":
+      return turn.understanding.confidence >= 0.8;
+    case "casual_chat":
+      return turn.understanding.confidence >= 0.65;
+    case "command":
+    case "opinion_request":
+      // A real structured query keeps the established Reasoner path. This
+      // fallback only prevents technical/help-seeking language from becoming
+      // a generic parser failure or an accidental first-person write.
+      return parsed.type !== "query";
+    case "question":
+      return (
+        turn.understanding.conversationMode === "technical" &&
+        parsed.type !== "query"
+      );
+    case "unknown":
+      return false;
+  }
+}
+
+function isSocialDialogueIntent(turn: DialogueTurnContext): boolean {
+  return (
+    turn.understanding.intent === "greeting" ||
+    turn.understanding.intent === "thanks" ||
+    turn.understanding.intent === "farewell"
+  );
+}
+
+function isBlockedSideEffectFailure(
+  parsed: Extract<ParseResult, { readonly type: "unknown" }>,
+): boolean {
+  return (
+    parsed.reason.startsWith("legacy-side-effect-blocked:") ||
+    parsed.reason.startsWith("legacy-side-effect-rejected:") ||
+    parsed.reason === "semantic-side-effect-rejected"
+  );
 }
 
 function clarificationReason(
@@ -634,6 +744,7 @@ export function createSunlandEngine(options: SunlandEngineOptions = {}): Sunland
     parsed: ParseResult,
     observation?: ObservationTurnState,
     resolutionOptions: RelationResolutionOptions = {},
+    dialogue?: DialogueTurnContext,
   ): string {
     if (observation !== undefined) {
       observeParsedResult(parsed, observation);
@@ -677,7 +788,12 @@ export function createSunlandEngine(options: SunlandEngineOptions = {}): Sunland
           );
         }
         const plan = defaultResponsePlanner.plan(result);
-        return personality.respond({ kind: "reasoning-result", result, plan });
+        return personality.respond({
+          kind: "reasoning-result",
+          result,
+          plan,
+          ...(dialogue === undefined ? {} : { dialogue }),
+        });
       }
       case "intent": {
         const context = intentToResponseContext(parsed, selfKnowledgeStore, memory);
@@ -712,6 +828,39 @@ export function createSunlandEngine(options: SunlandEngineOptions = {}): Sunland
         : normalizeSemanticContext(
             processOptions.semanticContext ?? createEmptySemanticContext(),
           );
+    const conversationUnderstanding = defaultConversationAnalyzer.analyze(
+      input,
+      semanticContext.conversationState,
+    );
+    const dialoguePlan = defaultDialoguePlanner.plan(
+      conversationUnderstanding,
+      semanticContext.conversationState,
+      {
+        ...(personality.id === "frost"
+          ? {
+              followUpFrequency: FROST_PERSONA_SPEC.followUpFrequency,
+              communityGenerationBias:
+                FROST_PERSONA_SPEC.furryExpressionFrequency,
+            }
+          : {}),
+        followUpSelectionSeed: input,
+      },
+    );
+    const nextConversationState = advanceConversationState(
+      semanticContext.conversationState,
+      conversationUnderstanding,
+      dialoguePlan,
+    );
+    const rememberedName = dialoguePlan.useMemory
+      ? memory.recall(MemoryKeys.Name)?.value
+      : undefined;
+    const dialogueTurn: DialogueTurnContext = Object.freeze({
+      raw: input,
+      understanding: conversationUnderstanding,
+      plan: dialoguePlan,
+      state: nextConversationState,
+      ...(rememberedName === undefined ? {} : { rememberedName }),
+    });
     const noContextUpdate = (): SemanticContextUpdate =>
       Object.freeze({
         kind: "none",
@@ -771,20 +920,31 @@ export function createSunlandEngine(options: SunlandEngineOptions = {}): Sunland
         return result;
       }
     };
-    const resultWithoutContext = (
+    const resultWithContext = (
       response: string,
-    ): SunlandProcessResult =>
-      finishWithObservation(
-        Object.freeze({
-          response,
-          semanticContextUpdate: noContextUpdate(),
-        }),
-      );
-    const resultWithAcceptedContext = (
-      response: string,
-      decision: UnderstandingDecision,
-      executedResult: ParseResult | null,
+      decision: UnderstandingDecision | null = null,
+      executedResult: ParseResult | null = null,
     ): SunlandProcessResult => {
+      const completedConversationState = completeConversationState(
+        nextConversationState,
+        {
+          askedQuestion: /[？?]/u.test(response),
+          furryExpressionUsed:
+            personality.id === "frost" &&
+            containsFurryExpression(response),
+          assistantOpeningKey: assistantOpeningKey(response),
+          communityLanguageUsed:
+            dialoguePlan.communityLanguageMode === "mirror" &&
+            containsCommunityLanguage(response),
+          ...(dialoguePlan.socialStrategy.reactionPattern === undefined
+            ? {}
+            : { reactionPattern: dialoguePlan.socialStrategy.reactionPattern }),
+          ...(dialoguePlan.socialStrategy.jokeConcept === undefined
+            ? {}
+            : { jokeConcept: dialoguePlan.socialStrategy.jokeConcept }),
+          banterUsed: dialoguePlan.socialStrategy.allowBanter,
+        },
+      );
       let canCommit = semanticContextMode === "enabled";
       if (canCommit && processOptions.canCommitSemanticContext !== undefined) {
         try {
@@ -794,11 +954,12 @@ export function createSunlandEngine(options: SunlandEngineOptions = {}): Sunland
         }
       }
       const semanticContextUpdate =
-        semanticMode === "passive"
+        semanticContextMode === "enabled"
           ? createSemanticContextUpdate({
               context: semanticContext,
               decision,
               executedResult,
+              conversationState: completedConversationState,
               turnId:
                 processOptions.turnId ??
                 `turn-${semanticContext.version + 1}`,
@@ -810,16 +971,39 @@ export function createSunlandEngine(options: SunlandEngineOptions = {}): Sunland
         Object.freeze({ response, semanticContextUpdate }),
       );
     };
+    const resultWithoutContext = (response: string): SunlandProcessResult =>
+      finishWithObservation(
+        Object.freeze({ response, semanticContextUpdate: noContextUpdate() }),
+      );
 
     const legacyResult: ParseResult = parser.parse(input);
     lastSemanticShadow = null;
+    const fastDialogueResult = (
+      adoptedResult?: ParseResult,
+    ): SunlandProcessResult => {
+      if (observation !== undefined) {
+        if (adoptedResult !== undefined) {
+          observeParsedResult(adoptedResult, observation);
+        } else {
+          observation.resultCategory = "understood";
+          observation.reasonCategory = "unclassified";
+        }
+        observation.classificationLocked = true;
+      }
+      return resultWithContext(
+        personality.respond({ kind: "dialogue", turn: dialogueTurn }),
+      );
+    };
 
     if (semanticMode === "off") {
       if (observation !== undefined) {
         observation.legacyFallback = true;
       }
+      if (shouldUseFastDialogue(legacyResult, dialogueTurn)) {
+        return fastDialogueResult();
+      }
       return resultWithoutContext(
-        respondToParseResult(legacyResult, observation),
+        respondToParseResult(legacyResult, observation, {}, dialogueTurn),
       );
     }
 
@@ -834,6 +1018,7 @@ export function createSunlandEngine(options: SunlandEngineOptions = {}): Sunland
         semanticContextMode === "enabled"
           ? semanticContext
           : undefined,
+        conversationUnderstanding.community,
       );
       decision = semanticPlan(
         analysis,
@@ -879,15 +1064,17 @@ export function createSunlandEngine(options: SunlandEngineOptions = {}): Sunland
           legacyResult,
         );
       }
-      const response = isLegacySideEffectResult(legacyResult)
+      const response = shouldUseFastDialogue(legacyResult, dialogueTurn)
+        ? personality.respond({ kind: "dialogue", turn: dialogueTurn })
+        : isLegacySideEffectResult(legacyResult)
         ? respondToParseResult({
             type: "unknown",
             raw: legacyResult.raw,
             reason: "semantic-side-effect-validation-unavailable",
-          }, observation)
+          }, observation, {}, dialogueTurn)
         : respondToParseResult(legacyResult, observation, {
             negatedInput: true,
-          });
+          }, dialogueTurn);
       if (observation !== undefined) {
         observation.resultCategory = "safe-fallback";
         observation.reasonCategory = "semantic-runtime";
@@ -906,13 +1093,17 @@ export function createSunlandEngine(options: SunlandEngineOptions = {}): Sunland
             decision,
             false,
           ),
+          dialogueTurn,
         ),
       );
     }
 
     switch (adaptation.kind) {
       case "adopt":
-        return resultWithAcceptedContext(
+        if (shouldUseFastDialogue(adaptation.result, dialogueTurn)) {
+          return fastDialogueResult(adaptation.result);
+        }
+        return resultWithContext(
           respondToParseResult(
             adaptation.result,
             observation,
@@ -921,20 +1112,50 @@ export function createSunlandEngine(options: SunlandEngineOptions = {}): Sunland
               decision,
               true,
             ),
+            dialogueTurn,
           ),
           decision,
           adaptation.result,
         );
       case "clarification":
+        if (
+          !isSocialDialogueIntent(dialogueTurn) &&
+          shouldUseFastDialogue(legacyResult, dialogueTurn)
+        ) {
+          return fastDialogueResult();
+        }
         return resultWithoutContext(
           respondToClarification(adaptation.context),
         );
       case "no-understanding":
+        if (
+          !isBlockedSideEffectFailure(adaptation.failure) &&
+          (
+            !isSocialDialogueIntent(dialogueTurn) ||
+            (
+              options.understandingPolicy === undefined &&
+              options.semanticRuntime === undefined &&
+              options.parser === undefined
+            )
+          ) &&
+          shouldUseFastDialogue(legacyResult, dialogueTurn)
+        ) {
+          return fastDialogueResult();
+        }
         return resultWithoutContext(
-          respondToParseResult(adaptation.failure, observation),
+          respondToParseResult(adaptation.failure, observation, {}, dialogueTurn),
         );
       case "fallback-legacy":
-        return resultWithAcceptedContext(
+        if (
+          (
+            !isSocialDialogueIntent(dialogueTurn) ||
+            options.understandingPolicy === undefined
+          ) &&
+          shouldUseFastDialogue(adaptation.result, dialogueTurn)
+        ) {
+          return fastDialogueResult();
+        }
+        return resultWithContext(
           respondToParseResult(
             adaptation.result,
             observation,
@@ -943,6 +1164,7 @@ export function createSunlandEngine(options: SunlandEngineOptions = {}): Sunland
               decision,
               false,
             ),
+            dialogueTurn,
           ),
           decision,
           adaptation.result,

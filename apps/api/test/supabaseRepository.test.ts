@@ -7,6 +7,26 @@ afterEach(() => {
 });
 
 describe("Supabase repository failure mapping", () => {
+  it("loads short-term context by both user and conversation", async () => {
+    const request = vi.fn(async () => new Response("[]", {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", request);
+    const repository = new SupabaseRepository(
+      "https://database.example",
+      "service-secret",
+    );
+
+    await repository.loadSnapshot("user/a", "conversation/b");
+
+    const urls = request.mock.calls.map((call) =>
+      String((call as unknown as readonly [string])[0]));
+    const contextUrl = urls.find((url) => url.includes("/sunland_ai_context?"));
+    expect(contextUrl).toContain("user_id=eq.user%2Fa");
+    expect(contextUrl).toContain("conversation_id=eq.conversation%2Fb");
+  });
+
   it("distinguishes idempotency-key reuse from a revision retry", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(
       JSON.stringify({ message: "turn_id_reused" }),

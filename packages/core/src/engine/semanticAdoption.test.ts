@@ -128,6 +128,39 @@ describe("SunlandEngine Semantic Understanding Stage 8.5A", () => {
     });
   });
 
+  it.each([
+    ["请问猫能做什么", "爬树"],
+    ["我想知道猫会什么", "爬树"],
+    ["猫属于哪一类", "动物"],
+    ["猫喜欢啥", "鱼"],
+    ["猫喜爱什么", "鱼"],
+    ["猫在哪", "屋顶"],
+    ["猫在哪儿", "屋顶"],
+    ["猫位于哪里", "屋顶"],
+    ["猫是不是动物", "动物"],
+  ])(
+    "understands natural read-only query '%s' without mutating state",
+    (input, expected) => {
+      const engine = createSunlandEngine({
+        personalityId: "plain",
+        semanticMode: "passive",
+      });
+      for (const fact of [
+        { subject: "猫", relation: "会", object: "爬树", negated: false },
+        { subject: "猫", relation: "属于", object: "动物", negated: false },
+        { subject: "猫", relation: "喜欢", object: "鱼", negated: false },
+        { subject: "猫", relation: "在", object: "屋顶", negated: false },
+      ] as const) {
+        engine.knowledgeStore.add(fact, { source: "user" });
+      }
+      const before = engine.knowledgeStore.all();
+
+      expect(engine.respond(input)).toContain(expected);
+      expect(engine.knowledgeStore.all()).toEqual(before);
+      expect(engine.memory.list()).toEqual([]);
+    },
+  );
+
   it("turns '你会吗' into a real clarification without writing Knowledge", () => {
     const engine = createSunlandEngine({
       semanticMode: "passive",

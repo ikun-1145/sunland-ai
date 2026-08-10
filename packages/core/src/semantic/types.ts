@@ -5,6 +5,8 @@ import type {
   QueryKind,
 } from "@/types/parser";
 import type { ClarificationKind } from "@/types/planner";
+import type { ConversationState } from "@/types/dialogue";
+import type { CommunityResolution } from "@/types/community";
 
 export type { ClarificationKind } from "@/types/planner";
 
@@ -238,6 +240,8 @@ export interface SemanticContext {
   readonly schemaVersion: 1;
   readonly version: number;
   readonly recentTurns: readonly SemanticTurnSummary[];
+  /** Optional bounded chat summary; never contains raw messages or durable memory. */
+  readonly conversationState?: ConversationState;
 }
 
 export type SemanticContextUpdate =
@@ -257,6 +261,8 @@ export interface SemanticAnalysis {
   readonly extraction: SemanticExtraction;
   readonly candidates: readonly SemanticCandidate[];
   readonly diagnostics: readonly SemanticDiagnostic[];
+  /** Added by the default runtime; optional for backward-compatible custom runtimes. */
+  readonly community?: CommunityResolution;
 }
 
 export type UnderstandingRiskLevel = "none" | "low" | "medium" | "high";

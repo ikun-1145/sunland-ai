@@ -120,6 +120,56 @@ describe("Semantic Conversation Context", () => {
     expect(normalized.recentTurns.at(-1)?.turnId).toBe("turn-7");
   });
 
+  it("normalizes bounded conversation state without accepting raw history", () => {
+    const normalized = normalizeSemanticContext({
+      schemaVersion: 1,
+      version: 2,
+      recentTurns: [],
+      conversationState: {
+        recentTopic: "meal",
+        currentMood: "happy",
+        conversationMode: "casual",
+        familiarity: 999,
+        followUpCooldown: 999,
+        raw: "must not survive",
+      },
+    });
+
+    expect(normalized.conversationState).toEqual({
+      recentTopic: "meal",
+      currentMood: "happy",
+      conversationMode: "casual",
+      relationship: {
+        familiarity: 1,
+        casualness: 0,
+        teasingPermission: 0,
+      },
+      followUpCooldown: 2,
+      recentFollowUpCount: 0,
+      lastAssistantAskedQuestion: false,
+      furryExpressionCooldown: 0,
+      recentAssistantOpeningKeys: [],
+      communityContext: {
+        activeDomains: [],
+        confidence: 0,
+        recentlyDetectedTerms: [],
+        userVocabularyStyle: "standard",
+        slangMirroringLevel: 0.25,
+      },
+      communityLanguageCooldown: 0,
+      recentReactionPatterns: [],
+      recentJokeConcepts: [],
+      banterCooldown: 0,
+      recentHostileTurns: 0,
+    });
+    expect(JSON.stringify(normalized)).not.toContain("must not survive");
+    expect(normalizeSemanticContext({
+      version: 1,
+      recentTurns: [],
+      conversationState: "damaged",
+    })).not.toHaveProperty("conversationState");
+  });
+
   it("resolves a pronoun only from one explicit focus", () => {
     const analysis = analyzeSemanticInput(
       "它会什么",

@@ -11,3 +11,6 @@ export * from "./memory";
 export * from "./graph";
 export * from "./personality";
 export * from "./storage";
+export * from "./dialogue";
+export * from "./community";
+export * from "./pragmatics";

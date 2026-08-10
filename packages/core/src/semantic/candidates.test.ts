@@ -133,6 +133,76 @@ describe("semantic candidate generation", () => {
     ).toBe(false);
   });
 
+  it.each([
+    ["请问猫能做什么", "object-of", "会", "猫", undefined],
+    ["猫属于哪一类", "object-of", "属于", "猫", undefined],
+    ["猫喜欢啥", "object-of", "喜欢", "猫", undefined],
+    ["猫喜爱什么", "object-of", "喜欢", "猫", undefined],
+    ["猫在哪儿", "locate", "在", "猫", undefined],
+    ["猫位于哪里", "locate", "在", "猫", undefined],
+    ["猫能不能飞", "verify", "会", "猫", "飞"],
+    ["猫是动物对吗", "verify", "属于", "猫", "动物"],
+  ])(
+    "normalizes natural read-only relation query %s",
+    (raw, kind, relation, subject, object) => {
+      const result = relationCandidates(raw)
+        .map((candidate) => candidate.result)
+        .find(
+          (candidate) =>
+            candidate?.type === "query" &&
+            candidate.kind === kind &&
+            candidate.relation === relation &&
+            candidate.subject === subject,
+        );
+
+      expect(result).toMatchObject({
+        type: "query",
+        kind,
+        relation,
+        subject,
+        ...(object === undefined ? {} : { object }),
+      });
+    },
+  );
+
+  it("collapses a reduplicated relation question to one correct semantic candidate", () => {
+    const candidates = relationCandidates("猫会不会飞");
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.result).toMatchObject({
+      type: "query",
+      kind: "verify",
+      subject: "猫",
+      relation: "会",
+      object: "飞",
+    });
+  });
+
+  it.each([
+    ["机会是什么", "机会"],
+    ["现在是什么", "现在"],
+  ])(
+    "does not split a one-character relation alias out of the word in %s",
+    (raw, subject) => {
+      const relationResults = relationCandidates(raw).map(
+        ({ result }) => result,
+      );
+
+      expect(
+        relationResults.some(
+          (result) =>
+            result?.type === "query" && result.subject === subject,
+        ),
+      ).toBe(true);
+      expect(
+        relationResults.some(
+          (result) =>
+            result?.type === "query" && result.subject !== subject,
+        ),
+      ).toBe(false);
+    },
+  );
+
   it("retains a partial weak relation candidate with missing slots", () => {
     const candidate = relationCandidates("你会吗").find(({ concepts }) =>
       concepts.some(({ id }) => id === "can"),

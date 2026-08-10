@@ -158,6 +158,68 @@ function parseResultsEquivalent(
   }
 }
 
+function queryRelationsEquivalent(
+  candidate: SemanticCandidate,
+  left: Relation,
+  right: Relation,
+): boolean {
+  if (normalized(left) === normalized(right)) return true;
+  return (
+    candidate.concepts.some(({ id }) => id === "is-a") &&
+    new Set([normalized(left), normalized(right)]).size === 2 &&
+    [left, right].every(
+      (relation) => relation === "是" || relation === "属于",
+    )
+  );
+}
+
+function isReadOnlyQueryRepair(
+  candidate: SemanticCandidate,
+  legacyResult: ParseResult,
+  analysis: SemanticAnalysis,
+): boolean {
+  const result = candidate.result;
+  if (
+    candidate.producer !== "relation-pattern" ||
+    effectiveSideEffect(candidate) ||
+    candidate.missingSlots.length > 0 ||
+    result?.type !== "query"
+  ) {
+    return false;
+  }
+
+  if (legacyResult.type === "statement") {
+    return (
+      analysis.extraction.questionCues.length > 0 &&
+      candidate.evidence.some(({ kind }) => kind === "question-cue")
+    );
+  }
+
+  if (legacyResult.type !== "query") return false;
+  const hasBoundedQueryRepairEvidence = candidate.evidence.some(
+    ({ kind, key }) =>
+      kind === "structural" &&
+      (key === "query:subject-framing" ||
+        key === "query:repeated-interrogative"),
+  );
+  return (
+    hasBoundedQueryRepairEvidence &&
+    result.kind === legacyResult.kind &&
+    queryRelationsEquivalent(
+      candidate,
+      result.relation,
+      legacyResult.relation,
+    ) &&
+    normalized(result.object ?? "") ===
+      normalized(legacyResult.object ?? "") &&
+    (normalized(result.subject) === normalized(legacyResult.subject) ||
+      candidate.evidence.some(
+        ({ kind, key }) =>
+          kind === "structural" && key === "query:subject-framing",
+      ))
+  );
+}
+
 function isContextResolutionOfLegacy(
   candidate: SemanticCandidate,
   legacyResult: ParseResult,
@@ -435,6 +497,11 @@ export function adaptUnderstandingDecision(
         !isContextResolutionOfLegacy(
           decision.selectedCandidate,
           legacyResult,
+        ) &&
+        !isReadOnlyQueryRepair(
+          decision.selectedCandidate,
+          legacyResult,
+          analysis,
         )
       ) {
         return Object.freeze({

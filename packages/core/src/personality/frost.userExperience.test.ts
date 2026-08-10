@@ -14,15 +14,15 @@ function countFrostAccents(reply: string): number {
 }
 
 describe("Frost user-facing response experience", () => {
-  it("introduces Sunland naturally and offers concrete ways to start", () => {
+  it("introduces Frost naturally without opening like a capability menu", () => {
     const engine = createSunlandEngine();
 
     const reply = engine.respond("你好");
 
     expect(reply).toContain("霜蓝");
     expect(reply).toContain("Sunland AI");
-    expect(reply).toMatch(/聊|问/);
-    expect(reply).toMatch(/教|信息|知识/);
+    expect(reply.length).toBeLessThanOrEqual(48);
+    expect(reply).not.toMatch(/可以教我|可以问我|功能|能力|知识伙伴/);
     expect(reply).not.toMatch(INTERNAL_TERMS);
     expect(reply).not.toMatch(/通用大模型|真人/);
   });

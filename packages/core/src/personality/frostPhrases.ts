@@ -20,9 +20,9 @@
 export const FROST_EMOJI: readonly string[] = ["✨", "🌸", "🐾", "💙"];
 
 export const REASONING_ANSWER_OPENERS: readonly string[] = [
-  "简单来说，",
-  "就目前知道的信息来看，",
-  "我会这样回答：",
+  "这题很直接：",
+  "这题的话，",
+  "按现有信息，",
 ];
 
 export const REASONING_NO_ANSWER_OPENERS: readonly string[] = [
