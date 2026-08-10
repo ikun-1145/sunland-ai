@@ -2,10 +2,14 @@ import type { KnowledgeRecord, MemoryRecord } from "@sunland-ai/core";
 
 export interface Env {
   USER_BRAINS: DurableObjectNamespace<import("./userBrain").SunlandUserBrain>;
-  APP_JWT_SECRET: string;
+  APP_JWT_PRIMARY_SECRET?: string;
+  APP_JWT_LEGACY_SECRET?: string;
+  APP_JWT_SECRET?: string;
   APP_JWT_ISSUER?: string;
-  SUPABASE_URL: string;
-  SUPABASE_SERVICE_ROLE_KEY: string;
+  SUPABASE_PROJECT_URL?: string;
+  SUPABASE_SECRET_KEY?: string;
+  SUPABASE_URL?: string;
+  SUPABASE_SERVICE_ROLE_KEY?: string;
   CORS_ORIGINS: string;
   CORE_VERSION: string;
 }

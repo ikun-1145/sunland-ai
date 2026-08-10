@@ -1,15 +1,26 @@
 # Deployment runbook
 
-## Required Worker secrets
+## Required Worker configuration
 
 Set these separately for production and `--env staging`:
 
-- `APP_JWT_SECRET` — the existing application JWT HMAC secret.
-- `SUPABASE_URL` — `https://klyrasrqgxijwrxuoevj.supabase.co`.
-- `SUPABASE_SERVICE_ROLE_KEY` — server-only Supabase service-role credential.
+- `APP_JWT_PRIMARY_SECRET` (Secret) — the new application JWT HMAC secret.
+- `APP_JWT_LEGACY_SECRET` (Secret) — the existing application JWT HMAC secret,
+  retained only for the bounded rotation window.
+- `SUPABASE_SECRET_KEY` (Secret) — the server-only Supabase `sb_secret_...`
+  credential; the legacy service-role JWT remains a temporary fallback.
+- `SUPABASE_PROJECT_URL` (plain variable) —
+  `https://klyrasrqgxijwrxuoevj.supabase.co`.
 
-Never put any of these values in Wrangler configuration, client code, an APK,
-logs, CI artifacts, or issue text.
+Never put Secret values in Wrangler configuration, client code, an APK, logs,
+CI artifacts, or issue text. `APP_JWT_SECRET`, `SUPABASE_URL`, and
+`SUPABASE_SERVICE_ROLE_KEY` remain accepted only so a deployed environment can
+be migrated without downtime.
+
+The gateway bridge must continue signing with the legacy application secret
+while both the Core and gateway verify primary plus legacy tokens. A later,
+separately reviewed deployment may switch signing to the primary secret. Keep
+legacy verification for at least the seven-day application-token lifetime.
 
 ## Safe deployment sequence
 

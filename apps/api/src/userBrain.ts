@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 
 import { executeTurn } from "./coreSession";
+import { supabaseServerConfig } from "./config";
 import { boundedText, HttpError, jsonResponse, readJson, sha256 } from "./http";
 import { RevisionConflictError, SupabaseRepository } from "./supabaseRepository";
 import type { Env, TurnResponse } from "./types";
@@ -16,7 +17,8 @@ export class SunlandUserBrain extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.repository = new SupabaseRepository(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);
+    const { url, serverKey } = supabaseServerConfig(env);
+    this.repository = new SupabaseRepository(url, serverKey);
   }
 
   private async assertRateLimit(): Promise<void> {

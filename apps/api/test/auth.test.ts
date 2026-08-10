@@ -40,4 +40,25 @@ describe("application JWT authentication", () => {
     await expect(authenticate(new Request("https://example.test", { headers: { authorization: `Bearer ${wrong}` } }), "test-secret"))
       .rejects.toMatchObject({ status: 401, code: "invalid_token" });
   });
+
+  it("accepts both primary and legacy secrets during rotation", async () => {
+    const payload = { id: "user-a", exp: Math.floor(Date.now() / 1000) + 60 };
+    const primary = await token(payload, "primary-secret");
+    const legacy = await token(payload, "legacy-secret");
+    const secrets = ["primary-secret", "legacy-secret"];
+
+    await expect(authenticate(new Request("https://example.test", {
+      headers: { authorization: `Bearer ${primary}` },
+    }), secrets)).resolves.toMatchObject({ id: "user-a" });
+    await expect(authenticate(new Request("https://example.test", {
+      headers: { authorization: `Bearer ${legacy}` },
+    }), secrets)).resolves.toMatchObject({ id: "user-a" });
+  });
+
+  it("fails closed when no verification secret is configured", async () => {
+    const jwt = await token({ id: "user-a", exp: Math.floor(Date.now() / 1000) + 60 });
+    await expect(authenticate(new Request("https://example.test", {
+      headers: { authorization: `Bearer ${jwt}` },
+    }), [])).rejects.toMatchObject({ status: 503, code: "auth_unavailable" });
+  });
 });

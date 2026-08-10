@@ -1,3 +1,4 @@
-APP_JWT_SECRET=replace-with-the-existing-api-jwt-secret
-SUPABASE_URL=https://example.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=replace-with-service-role-key
+APP_JWT_PRIMARY_SECRET=replace-with-new-application-jwt-secret
+APP_JWT_LEGACY_SECRET=replace-with-existing-application-jwt-secret
+SUPABASE_PROJECT_URL=https://example.supabase.co
+SUPABASE_SECRET_KEY=replace-with-server-only-key

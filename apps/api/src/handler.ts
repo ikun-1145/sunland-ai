@@ -1,4 +1,5 @@
 import { authenticate } from "./auth";
+import { applicationVerificationSecrets, supabaseServerConfig } from "./config";
 import { errorResponse, HttpError, jsonResponse } from "./http";
 import { SupabaseRepository } from "./supabaseRepository";
 import type { Env } from "./types";
@@ -41,7 +42,7 @@ async function handle(request: Request, env: Env): Promise<Response> {
     });
   }
 
-  const user = await authenticate(request, env.APP_JWT_SECRET, env.APP_JWT_ISSUER);
+  const user = await authenticate(request, applicationVerificationSecrets(env), env.APP_JWT_ISSUER);
   const id = env.USER_BRAINS.idFromName(user.id);
   const stub = env.USER_BRAINS.get(id);
   const headers = new Headers(request.headers);
@@ -66,7 +67,8 @@ const worker = {
     }
   },
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    const repository = new SupabaseRepository(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);
+    const { url, serverKey } = supabaseServerConfig(env);
+    const repository = new SupabaseRepository(url, serverKey);
     ctx.waitUntil(repository.deleteExpiredTurnResults());
   },
 } satisfies ExportedHandler<Env>;

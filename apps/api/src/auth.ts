@@ -34,7 +34,7 @@ function parsePayload(segment: string): JwtPayload {
 
 export async function authenticate(
   request: Request,
-  secret: string,
+  secrets: string | readonly string[],
   expectedIssuer?: string,
 ): Promise<AuthenticatedUser> {
   const authorization = request.headers.get("authorization") ?? "";
@@ -55,19 +55,27 @@ export async function authenticate(
     throw new HttpError(401, "invalid_token", "登录凭证算法不受支持。\n");
   }
 
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["verify"],
-  );
-  const verified = await crypto.subtle.verify(
-    "HMAC",
-    key,
-    decodeBase64Url(parts[2]),
-    new TextEncoder().encode(`${parts[0]}.${parts[1]}`),
-  );
+  const candidates = (typeof secrets === "string" ? [secrets] : secrets)
+    .filter((secret) => secret.length > 0);
+  if (candidates.length === 0) {
+    throw new HttpError(503, "auth_unavailable", "登录验证服务暂时不可用。");
+  }
+  const signature = decodeBase64Url(parts[2]);
+  const signedData = new TextEncoder().encode(`${parts[0]}.${parts[1]}`);
+  let verified = false;
+  for (const secret of candidates) {
+    const key = await crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode(secret),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["verify"],
+    );
+    if (await crypto.subtle.verify("HMAC", key, signature, signedData)) {
+      verified = true;
+      break;
+    }
+  }
   if (!verified) throw new HttpError(401, "invalid_token", "登录凭证无效。\n");
 
   const payload = parsePayload(parts[1]);
