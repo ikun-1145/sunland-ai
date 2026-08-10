@@ -17,6 +17,11 @@ CI artifacts, or issue text. `APP_JWT_SECRET`, `SUPABASE_URL`, and
 `SUPABASE_SERVICE_ROLE_KEY` remain accepted only so a deployed environment can
 be migrated without downtime.
 
+The API sends modern `sb_secret_...` credentials only through the `apikey`
+header. The `Authorization: Bearer` copy is retained only for the legacy
+JWT-based service-role key because Supabase rejects a modern secret key when it
+is parsed as a JWT.
+
 The gateway bridge must continue signing with the legacy application secret
 while both the Core and gateway verify primary plus legacy tokens. A later,
 separately reviewed deployment may switch signing to the primary secret. Keep

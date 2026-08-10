@@ -44,4 +44,19 @@ describe("Supabase repository failure mapping", () => {
     expect(init.method).toBe("DELETE");
     expect(new Headers(init.headers).get("authorization")).toBe("Bearer service-secret");
   });
+
+  it("sends a modern secret key only through apikey", async () => {
+    const request = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", request);
+    const repository = new SupabaseRepository(
+      "https://database.example",
+      "sb_secret_server-key",
+    );
+    await repository.deleteExpiredTurnResults();
+
+    const [, init] = request.mock.calls[0] as unknown as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.get("apikey")).toBe("sb_secret_server-key");
+    expect(headers.get("authorization")).toBeNull();
+  });
 });

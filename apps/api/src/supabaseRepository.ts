@@ -29,14 +29,18 @@ export class RevisionConflictError extends Error {}
 export class SupabaseRepository {
   private readonly baseUrl: string;
 
-  constructor(url: string, private readonly serviceRoleKey: string) {
+  constructor(url: string, private readonly serverKey: string) {
     this.baseUrl = `${url.replace(/\/$/u, "")}/rest/v1`;
   }
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const headers = new Headers(init.headers);
-    headers.set("apikey", this.serviceRoleKey);
-    headers.set("authorization", `Bearer ${this.serviceRoleKey}`);
+    headers.set("apikey", this.serverKey);
+    if (this.serverKey.startsWith("sb_secret_")) {
+      headers.delete("authorization");
+    } else {
+      headers.set("authorization", `Bearer ${this.serverKey}`);
+    }
     headers.set("content-type", "application/json");
     const response = await fetch(`${this.baseUrl}${path}`, { ...init, headers });
     if (!response.ok) {
