@@ -19,6 +19,14 @@
     "CORS_ORIGINS": "https://sunland.dev,https://www.sunland.dev",
     "CORE_VERSION": "0.1.0"
   },
+  "secrets": {
+    "required": [
+      "APP_JWT_PRIMARY_SECRET",
+      "APP_JWT_LEGACY_SECRET",
+      "SUPABASE_SECRET_KEY",
+      "SUPABASE_URL"
+    ]
+  },
   "durable_objects": {
     "bindings": [
       {
@@ -54,7 +62,8 @@
         "required": [
           "APP_JWT_PRIMARY_SECRET",
           "APP_JWT_LEGACY_SECRET",
-          "SUPABASE_SECRET_KEY"
+          "SUPABASE_SECRET_KEY",
+          "SUPABASE_URL"
         ]
       },
       "durable_objects": {
