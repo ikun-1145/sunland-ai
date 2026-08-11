@@ -2,78 +2,76 @@
 
 ## 信任模型
 
-Sunland Core 是确定性的本地符号 Core，但不是认证系统或权限系统。
+Sunland Core 是确定性的符号引擎，不是认证、权限或网络安全系统。
 
 | 数据/组件 | 信任状态 | 责任方 |
 |---|---|---|
-| 用户输入 | 不可信 | Core 解析和安全降级 |
-| 恢复的 Context | 不可信 | SDK 规范化 |
-| StorageAdapter 内容 | 不可信持久化数据 | Core 加载器校验，宿主隔离 key |
-| verified identity | Core 不可见 | Web/Flutter 宿主 |
-| conversation owner | Core 不可见 | Provider |
-| SDK Bundle/manifest | 发布产物 | release 流程与宿主校验 |
-| UI 渲染 | Core 外部 | 宿主转义和安全渲染 |
+| 用户输入 | 不可信 | API 限制 + Core 解析与安全降级 |
+| application JWT | 不可信直到验证 | Worker auth |
+| verified user id | Worker 内可信、Core 不可见 | Worker/Durable Object |
+| Conversation owner | Core 不可见 | API 与数据库键 |
+| 恢复的 Context | 不可信 | Core normalize |
+| Knowledge/Memory snapshot | 不可信持久化数据 | Repository 映射 + Core 加载器 |
+| legacy migration payload | 不可信 | API validation + DB constraints |
+| Observation Summary | 受限诊断 | Core 白名单与二次校验 |
+| UI 渲染 | Core 外部 | 客户端安全渲染 |
 
-## 身份与状态隔离
+## 身份与路由
 
-Core 不读取 token、邮箱、Supabase Session、Flutter 账号对象或浏览器用户缓存。
-Provider 必须在创建/访问 Engine 前验证身份，并拒绝空、匿名、共享或归属不一致的
-namespace。
+Worker 只接受 Bearer JWT，要求 HS256、有效签名、未过期 exp 和长度受限的字符串 id。配置 issuer 时，存在但不匹配的 iss 会被拒绝。
 
-Knowledge 和 Memory 的持久化 key 必须按已验证用户隔离；Context 还必须按会话
-隔离。身份变化时，旧请求不得提交状态。
+用户身份来自已验证 JWT id，不来自 body、query、email 或客户端缓存。Worker 转发 Durable Object 前删除 Authorization，并写入内部 x-sunland-user-id。公网客户端不能依赖或伪造该内部 header 获得其他用户状态，因为路由层会覆盖它。
 
-## 输入与副作用安全
+## 状态隔离
 
-- Core 必须把输入视为不可信文本。
-- 不完整、否定、歧义、复合或明确禁止的教学不能产生状态写入。
-- Semantic 候选不直接执行写入。
-- 未知输入和内部异常必须安全降级。
-- 用户回复不能暴露内部诊断、策略 ID、候选、置信度或堆栈。
+- Durable Object 以 verified id 命名，每个用户串行处理请求。
+- Supabase 查询和 RPC 都包含 user_id。
+- Knowledge 与 Memory 按用户隔离。
+- Context 按用户 + conversationId 隔离。
+- turn result 按用户 + turnId 隔离。
+- sunland_ai_* 表撤销 public、anon 与 authenticated 访问，只授予服务端角色。
 
-Provider 不得添加绕过以上边界的关键词写入逻辑。
+Core 不读取 Token、邮箱、Supabase Session 或用户账号对象。
+
+## 输入与副作用
+
+- 默认 JSON body 最大 64 KiB；legacy migration 最大 8 MiB。
+- turn、cursor、ID、输入、记录数量、字符串、时间、confidence、source 和 Context 版本都有界。
+- Semantic 分析不直接写 Knowledge/Memory。
+- 不完整、歧义、冲突、禁止或证据不足的副作用输入必须澄清或安全拒绝。
+- 未知输入和内部异常不能向用户泄漏 Candidate、Policy ID、置信度、堆栈或数据库详情。
+- API Repository 日志只记录固定事件、HTTP 状态、无 query 的资源路径和 Supabase request ID。
+
+## 幂等、并发与失败
+
+turn 请求 hash 与结果一起持久化。相同载荷重放返回已有结果，不同载荷复用 ID 返回 409。用户 revision 在事务内锁定，API 最多重算一次。
+
+Knowledge、Memory、Context、revision 和 response 在同一 RPC 中提交。Supabase 失败返回 503；不能返回尚未持久化的成功文本。
 
 ## 数据最小化
 
-Context 只保存跨轮解析所需的有限结构；Observation Summary 只允许固定白名单和
-分桶值。两者都不得包含原始输入、用户 ID、邮箱、token、完整知识或完整记忆。
+Context 只保存有界实体、关系、话题和 ConversationState。Observation Summary 只允许固定枚举与分桶值。两者都不得包含原始输入、用户 ID、邮箱、Token、完整 Knowledge/Memory 或 transcript。
 
-完整性日志只允许记录固定事件名、错误码、资源名、预期/实际 hash、字节数或版本。
+turn result 会保存最终 response 用于七天幂等重试，因此其访问和过期清理属于敏感持久化边界。
 
 ## 依赖边界
 
-可发布 SDK 不得依赖：
+Core 不得依赖 React、DOM、Flutter、Cloudflare、Supabase、HTTP、认证或外部 AI Provider。生产客户端不能导入 Core 内部文件或嵌入 Core Bundle。
 
-- React、Cytoscape 或其他 UI 框架；
-- DOM、WebView 或 Flutter SDK；
-- Supabase、HTTP 客户端或外部 AI Provider；
-- 宿主认证、路由、localStorage 全局或会话管理；
-- App/UI 文件和开发演示代码。
+其他模型 Provider 必须保持独立，不能复制 Sunland/Frost 身份与状态，也不能把其结果冒充 Core response。
 
-宿主也不得导入 Core 内部文件。唯一允许的运行时边界是发布的
-`sunland-core.js`。
+## Core 之外的职责
 
-## Bundle 完整性
-
-`release:core` 生成一次 Bundle，并同步相同字节和 SHA-256 manifest。完整性检查
-应覆盖：
-
-- artifact 名称；
-- 文件字节数；
-- SHA-256；
-- manifest version 与 `SUNLAND_CORE_VERSION`。
-
-本地 hash 校验用于发现发布漂移，不等同于数字签名。如果 Bundle 和 manifest
-同时被恶意替换，仍需依赖可信构建、部署权限和供应链保护。
-
-## 明确不属于 Core 的安全职责
-
-- 登录、token 刷新和账号权限；
-- 云端数据库 RLS；
-- 网络 TLS 与 API 鉴权；
+- 登录、Token 签发/刷新和账号权限；
+- CORS、TLS、域名与网络可达性；
+- Supabase 角色、RLS、备份和迁移；
 - Markdown/HTML/XSS 过滤；
-- 文件上传检查；
-- Flutter/Web UI 生命周期；
-- 付费和用量限制。
+- transcript、文件上传与付费；
+- 客户端取消和迟到 UI 响应；
+- Secret 管理和供应链保护。
 
-这些职责必须由宿主实现，但不能以安全为由复制或改写 Core 算法。
+这些职责由宿主实现，但不能借此复制或绕过 Core 算法。
+
+## Legacy 数据库门禁
+
+新 sunland_ai_* 表与旧 conversations/usage 等表的安全状态不同。准备迁移期间，旧表的最终 RLS 收紧仍受历史签名强制升级门禁约束。不能把已安装但尚未强制执行的 policy 描述为完整隔离。详见 [部署手册](../../../docs/deployment.md)。

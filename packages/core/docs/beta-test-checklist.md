@@ -1,5 +1,8 @@
 # Sunland AI v0.1.0 Beta 测试 Checklist
 
+> [!WARNING]
+> **历史文档。** 本清单面向早期 Web/Flutter 客户端本地 Bundle 集成，其中的页面、Flutter、Bundle hash 和发布命令不属于当前仓库。不要据此执行当前发布；现行验证与部署步骤见 [`docs/development.md`](../../../docs/development.md) 和 [`docs/deployment.md`](../../../docs/deployment.md)。
+
 本清单面向小规模封闭测试。每个测试者使用独立测试账号，不输入真实隐私、支付或其他
 敏感内容。Diagnostics 只在测试者明确理解并同意后开启。
 

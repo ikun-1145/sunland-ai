@@ -1,5 +1,8 @@
 # Sunland AI v0.1.0 Beta Launch Audit
 
+> [!WARNING]
+> **历史文档。** 本审计针对早期 Web/Flutter 客户端本地加载 Core Bundle 的架构，相关宿主不在当前仓库中。当前生产形态是 Cloudflare Worker 服务端执行 Core；本文仅作为当时审计证据保留，不能用作现行发布、测试或安全结论。现行资料见 [`docs/README.md`](../../../docs/README.md)。
+
 ## 结论
 
 **状态：有条件通过，可进行有主持人的小规模封闭测试，不建议直接公开放量。**

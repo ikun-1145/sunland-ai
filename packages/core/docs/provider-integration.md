@@ -1,83 +1,85 @@
-# Provider 集成指南
+# API 客户端集成指南
 
-Provider 是宿主与公开 SDK 之间的 Adapter，不是第二个 AI Core。
+当前生产边界是 Cloudflare Worker HTTP API。Web、Flutter 和未来客户端不得嵌入 Core Bundle，也不得在客户端复制符号决策。
 
-## Provider 职责
+## 客户端职责
 
-Provider 必须负责：
+客户端应：
 
-1. 验证当前身份，并确认会话 owner 与身份一致；
-2. 为每个已验证用户提供隔离的 storage namespace；
-3. 从消息中提取本轮用户输入；
-4. 调用 `engine.process()`；
-5. 把 Context 更新提交回原始会话；
-6. 处理 abort、迟到结果和 UI 增量回调；
-7. 将最终 `response` 原样交给宿主渲染。
+1. 从应用认证系统获取短期 application JWT；
+2. 为每个用户 turn 生成稳定且唯一的 turnId；
+3. 提交 conversationId、turnId、input 和可选 observationMode；
+4. 对网络失败使用同一 turnId 和完全相同的 body 重试；
+5. 将最终 response 当作普通文本安全渲染；
+6. 根据 HTTP status 与 error.code 处理认证、冲突、限频和服务不可用；
+7. 对删除 Knowledge、Memory 或 Context 提供清楚的范围说明与确认。
 
-Provider 不得负责：
+客户端不得：
 
-- 解析 Intent 或 Semantic Candidate；
-- 选择 Reasoner、Rule 或 Planner 策略；
-- 写入 Knowledge 或 Memory；
-- 定义 Frost/Sunland 公共身份；
-- 根据输入关键词伪造 Core 回复；
-- 回退到另一套 AI 模型并把结果冒充 Sunland Core。
+- 发送或信任 body userId；
+- 解析 Intent、Semantic Candidate 或 Observation 以建立第二套路由；
+- 直接写 Knowledge、Memory 或 Context；
+- 根据关键词伪造 Core 回复；
+- 把其他 AI Provider 回复冒充 Sunland Core；
+- 把 JWT、用户输入或诊断写入公开日志。
 
-## Web 集成
+## Turn 请求
 
-Web 只能从发布 Bundle 导入：
+~~~ts
+interface TurnRequest {
+  conversationId: string;
+  turnId: string;
+  input: string;
+  observationMode?: "off" | "summary";
+}
 
-```js
-import { createSunlandEngine } from "../vendor/sunland-core.js";
+const response = await fetch(
+  "https://ai-core.sunland.dev/v1/turns",
+  {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${applicationJwt}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      conversationId,
+      turnId,
+      input,
+      observationMode: "off",
+    }),
+  },
+);
+~~~
 
-const engine = createSunlandEngine({
-  storage: { adapter: window.localStorage, key: verifiedStorageKey },
-  semanticMode: "passive",
-  semanticDebug: false,
-  semanticContextMode: "enabled",
-});
-```
+客户端应在请求开始时捕获原始 conversationId 和 turnId。切换会话、退出登录或取消后，迟到 response 不能写入当前 UI 会话。
 
-生产 Web Provider 应按已验证用户缓存一个共享 Engine。不同会话共享该用户的
-Knowledge/Memory，但各自持有 Context 和 transcript。
+完整字段与错误见 [HTTP API](../../../docs/api.md)。
 
-## Flutter 集成
+## 幂等重试
 
-Flutter 不得把 Core 业务逻辑翻译成 Dart。推荐边界：
+turnId 是同一用户下的幂等键。超时或 503 后重试必须保留：
 
-```text
-Flutter UI -> SunlandLocalProvider -> SunlandCoreClient
-           -> JavaScript Runtime Adapter -> sunland-core.js
-```
+- 相同 turnId；
+- 相同 conversationId；
+- 相同 input；
+- 相同 observationMode。
 
-`SunlandCoreClient` 对 UI 只暴露输入、请求 ID、不透明状态快照和最终文本。具体
-JavaScript Bridge 可以使用 SDK 的公开函数，但 Semantic、Reasoner、Knowledge
-等内部名称不能扩散到 Dart UI。
+任何字段变化都应生成新 turnId。服务端对不同载荷复用 turnId 返回 409，而不是猜测客户端意图。
 
-替换 WebView 时只替换 Runtime Adapter；Provider、会话格式以及 Core 本身不变。
+## 状态范围
 
-## Context 提交流程
+- Knowledge 与姓名 Memory 属于用户，可跨会话使用。
+- Semantic Context 属于用户 + conversationId。
+- 聊天 transcript 由本仓库外的聊天层拥有。
+- 删除一个 Context 不会删除 Knowledge、Memory 或 transcript。
+- 删除 Knowledge 不会删除姓名 Memory 或 Context。
 
-Provider 应在请求开始时捕获：
+客户端 UI 必须准确表达这些边界。
 
-- verified user ID；
-- conversation ID 和 owner；
-- Context version；
-- request/turn ID；
-- abort signal。
+## Observation
 
-只有这些边界仍然成立时，才提交 `semanticContextUpdate`。具体流程见
-[Context 契约](./context.md)。
+observationMode 默认为 off。summary 只用于经批准的隐私安全诊断。Observation Summary 是白名单、分桶、版本化对象，不包含原始输入，但客户端仍不能用它推断用户身份、改变回复或决定状态写入。
 
-## Bundle 与版本
+## Provider 隔离
 
-- Web 与 Flutter 必须使用同一次 release 产生的 Bundle。
-- manifest SHA-256、字节数和版本应在构建或初始化时校验。
-- 不一致只记录结构化诊断，不读取用户身份，也不阻塞现有聊天流程。
-- 禁止手工复制、局部重建或修改已发布 Bundle。
-
-## DeepSeek 边界
-
-DeepSeek 是独立 Provider。它的模型 Prompt 只能包含模型调用所需规则，不能复制
-Sunland/Frost 身份、Knowledge、Memory 或 Reasoning 公共事实。Sunland 对话开始
-后，宿主不得在同一会话中切换为 DeepSeek。
+其他模型 Provider 与 Sunland 是独立路径。客户端可以在新会话中选择 Provider，但不能在已建立的 Sunland 会话中静默切换并保留同一身份。Sunland 的 Knowledge、Memory、Context 与 Personality 规则不能复制到其他 Provider Prompt。

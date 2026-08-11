@@ -1,43 +1,49 @@
-# Sunland Core Release Checklist
+# Sunland Core 变更发布清单
 
-本清单用于每次 Core SDK 发布。它不授权 commit、tag、push 或部署；
-这些操作需要发布负责人单独确认。
+本清单用于发布包含 Core 变化的 Worker 版本。当前 Core 是 private workspace package，不生成公开 npm 包或客户端 Bundle。本清单不授权 commit、push、部署、迁移或密钥操作。
 
 ## 1. 范围与版本
 
-- [ ] 确认发布内容不包含未批准的 AI 能力或 Core 算法变更。
-- [ ] 按 [`versioning.md`](./versioning.md) 判定 `MAJOR.MINOR.PATCH`。
-- [ ] 确认 `package.json`、`SUNLAND_CORE_VERSION` 和 API Surface 契约版本一致。
-- [ ] 将待发布项从 `Unreleased` 移到带日期的 Changelog 版本节。
+- [ ] 变更已限定在批准的能力、修复或内部重构范围。
+- [ ] 按 [versioning.md](./versioning.md) 判断是否需要版本变化。
+- [ ] packages/core/package.json、SUNLAND_CORE_VERSION、API Surface sdkVersion、apps/api/package.json 和 wrangler CORE_VERSION 一致。
+- [ ] 没有把 Playground 计划或历史 Bundle 流程写成已发布能力。
 
-## 2. 公开契约审核
+## 2. 公开契约
 
-- [ ] 确认宿主仍只通过 `src/sdk.ts`/发布 Bundle 调用 Core。
-- [ ] 检查 `git diff` 中是否存在公开导出、类型签名、默认值、schema、
-  持久化格式或用户可见行为变化。
-- [ ] 运行 `npm run test:api-surface`，不通过时不得直接改基线。
-- [ ] 如果是经批准的破坏性变更，先升级版本并准备迁移文档。
+- [ ] 宿主仍只从 @sunland-ai/core 导入。
+- [ ] 检查公开导出、类型签名、默认值、Context/Observation schema、持久化格式和用户可见行为。
+- [ ] 运行 Core contract suite；失败时不直接改基线。
+- [ ] 经批准的兼容性变化有版本决策、迁移与恢复测试。
 
-## 3. 构建与验证
+## 3. 验证
 
-- [ ] 记录发布前 Web/Flutter Bundle SHA256。
-- [ ] 在 `symbolic-ai` 目录执行 `npm run release:core`。
-- [ ] 执行 `npm run check:core-release`。
-- [ ] 确认 release report 中的 Bundle hash、字节数、运行时版本、
-  API Surface 和双端一致性检查全部通过。
-- [ ] 运行 Web 测试：`node --test tests/*.test.mjs`。
-- [ ] 运行 Flutter 测试：`flutter test`。
-- [ ] 运行 `git diff --check`。
+~~~bash
+npm run typecheck
+npm test
+npm run build
+git diff --check
+~~~
+
+- [ ] Core SDK、恢复和 70-export API Surface 契约通过。
+- [ ] API 认证、隔离、幂等、revision conflict 与持久化失败测试通过。
+- [ ] 固定 community、pragmatics、dialogue 与 initiative 评估集通过。
+- [ ] 没有未跟踪 Secret、.dev.vars、dist、依赖或本机文件。
 
 ## 4. 行为与安全
 
-- [ ] 确认 Provider、认证、会话持久化与 UI 代码未被发布工程改动。
-- [ ] 确认 Web/Flutter 使用同一 Bundle 和 manifest。
-- [ ] 确认 release report 不包含用户身份、密钥或本机绝对路径。
-- [ ] 对已知非阻断警告记录风险，不在发布改动中顺手重构。
+- [ ] 生产客户端仍通过 HTTP API 使用 Core。
+- [ ] Identity 只来自已验证 JWT id。
+- [ ] Knowledge、Memory 与 Context 作用域未被放宽。
+- [ ] 写入仍通过副作用安全门控。
+- [ ] Observation 不包含原始输入、身份或精确隐私数据。
+- [ ] 持久化失败不返回成功。
+- [ ] 数据库或认证变化已经单独批准。
 
-## 5. 交付
+## 5. Staging 与生产
 
-- [ ] 记录测试数量、Bundle SHA256 和 release report 路径。
-- [ ] 确认工作树只包含已审核的发布变更与既有未提交工作。
-- [ ] 获得明确授权后才可 commit、tag、push 或部署。
+- [ ] 按 [部署手册](../../../docs/deployment.md) 配置 staging。
+- [ ] 认证 contract、幂等重试、跨用户隔离、删除范围与强制 Supabase 失败全部验证。
+- [ ] 大陆三网可达性门禁通过。
+- [ ] deferred legacy RLS migration 仍未被正常部署应用。
+- [ ] 获得明确授权后才执行 commit、push、部署或迁移。
