@@ -8,6 +8,13 @@ import type {
   PragmaticUnderstanding,
   SocialResponseStrategy,
 } from "./pragmatics";
+import type { ConversationWorkingMemory, TopicContinuity } from "./topic";
+import type {
+  InitiativeAction,
+  InitiativeDecision,
+  InitiativeState,
+  InitiativeTurnSignals,
+} from "./initiative";
 
 /** Lightweight, privacy-safe contracts for chat-first turn planning. */
 export type DialogueIntent =
@@ -69,6 +76,9 @@ export interface ConversationUnderstanding {
   readonly community: CommunityResolution;
   /** Transient speech-act and social-context interpretation. */
   readonly pragmatics: PragmaticUnderstanding;
+  /** Transient topic/reference interpretation and the next bounded snapshot. */
+  readonly topicContinuity: TopicContinuity;
+  readonly initiativeSignals: InitiativeTurnSignals;
 }
 
 export interface ConversationRhythm {
@@ -113,6 +123,7 @@ export interface DialoguePlan {
   readonly communityLanguageMode: CommunityLanguageMode;
   readonly socialStrategy: SocialResponseStrategy;
   readonly secondaryGoals: readonly DialogueSecondaryGoal[];
+  readonly initiative: InitiativeDecision;
 }
 
 export interface RelationshipState {
@@ -123,8 +134,9 @@ export interface RelationshipState {
 }
 
 /**
- * Small per-conversation summary. It contains no raw messages, entities,
- * durable user facts or model-generated prose.
+ * Small per-conversation summary. It contains no raw messages, durable user
+ * facts or model-generated prose. Working-memory labels and summaries are
+ * bounded, deterministic and scoped to this conversation only.
  */
 export interface ConversationState {
   readonly recentTopic?: ConversationTopic;
@@ -150,6 +162,8 @@ export interface ConversationState {
   readonly recentJokeConcepts: readonly string[];
   readonly banterCooldown: number;
   readonly recentHostileTurns: number;
+  readonly workingMemory: ConversationWorkingMemory;
+  readonly initiative: InitiativeState;
 }
 
 export interface AssistantResponseSignals {
@@ -160,6 +174,7 @@ export interface AssistantResponseSignals {
   readonly reactionPattern?: string;
   readonly jokeConcept?: string;
   readonly banterUsed?: boolean;
+  readonly initiativeAction?: InitiativeAction;
 }
 
 /** Transient hand-off to Personality; `raw` is never part of persisted state. */

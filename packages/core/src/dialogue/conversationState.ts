@@ -17,6 +17,16 @@ import {
   createEmptyCommunityContext,
   normalizeCommunityContext,
 } from "@/community";
+import {
+  createEmptyConversationWorkingMemory,
+  normalizeConversationWorkingMemory,
+} from "./topicTracker";
+import {
+  advanceInitiativeState,
+  completeInitiativeState,
+  createEmptyInitiativeState,
+  normalizeInitiativeState,
+} from "./initiativeState";
 
 export const MAX_CONVERSATION_FAMILIARITY = 8;
 export const FOLLOW_UP_COOLDOWN_TURNS = 2;
@@ -78,6 +88,8 @@ export function createEmptyConversationState(): ConversationState {
     recentJokeConcepts: Object.freeze([]),
     banterCooldown: 0,
     recentHostileTurns: 0,
+    workingMemory: createEmptyConversationWorkingMemory(),
+    initiative: createEmptyInitiativeState(),
   });
 }
 
@@ -176,6 +188,8 @@ export function normalizeConversationState(value: unknown): ConversationState | 
       value.recentHostileTurns,
       RECENT_HOSTILE_TURN_LIMIT,
     ),
+    workingMemory: normalizeConversationWorkingMemory(value.workingMemory),
+    initiative: normalizeInitiativeState(value.initiative),
   });
 }
 
@@ -207,6 +221,11 @@ export function advanceConversationState(
           : 0),
     ),
   });
+  const initiative = advanceInitiativeState(
+    previous.initiative,
+    understanding,
+    relationship,
+  );
 
   const recentTopic =
     understanding.topic === "unknown"
@@ -242,6 +261,8 @@ export function advanceConversationState(
             previous.recentHostileTurns + 1,
           )
         : Math.max(0, previous.recentHostileTurns - 1),
+    workingMemory: understanding.topicContinuity.workingMemory,
+    initiative,
   });
 }
 
@@ -300,5 +321,11 @@ export function completeConversationState(
     banterCooldown: signals.banterUsed
       ? BANTER_COOLDOWN_TURNS
       : Math.max(0, current.banterCooldown - 1),
+    initiative: completeInitiativeState(
+      current.initiative,
+      signals.initiativeAction ?? "none",
+      signals.askedQuestion,
+      current.workingMemory.currentTurn,
+    ),
   });
 }

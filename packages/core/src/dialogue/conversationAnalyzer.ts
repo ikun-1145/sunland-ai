@@ -8,6 +8,8 @@ import type {
 } from "@/types";
 import type { CommunityResolution, PragmaticUnderstanding } from "@/types";
 import { resolveCommunityLanguage, resolvePragmatics } from "@/community";
+import { trackConversationTopics } from "./topicTracker";
+import { detectInitiativeSignals } from "./initiativeSignals";
 
 export interface ConversationAnalyzer {
   analyze(input: string, context?: ConversationState): ConversationUnderstanding;
@@ -194,8 +196,47 @@ export const defaultConversationAnalyzer: ConversationAnalyzer = Object.freeze({
     const pragmatics = resolvePragmatics(normalized, community, context);
     const topic = topicOf(normalized, community, context);
     const userMood = moodOf(normalized, community, pragmatics);
-    const intent = intentOf(normalized, userMood, community, pragmatics, context);
+    const initialIntent = intentOf(normalized, userMood, community, pragmatics, context);
     const conversationMode = modeOf(normalized, userMood, topic, context);
+    const topicContinuity = trackConversationTopics(
+      normalized,
+      context?.workingMemory,
+      community,
+      initialIntent,
+      topic,
+      conversationMode,
+    );
+    let intent = initialIntent === "unknown" &&
+      topicContinuity.activeTopic !== undefined &&
+      topicContinuity.transition !== "none" &&
+      topicContinuity.transition !== "ambiguous"
+      ? userMood !== "neutral" && userMood !== "playful"
+        ? "emotional_share"
+        : "casual_chat"
+      : initialIntent;
+    let initiativeSignals = detectInitiativeSignals(
+      normalized,
+      intent,
+      userMood,
+      topicContinuity,
+    );
+    if (
+      intent === "unknown" &&
+      (initiativeSignals.boredom ||
+        initiativeSignals.returned ||
+        initiativeSignals.explicitClose ||
+        initiativeSignals.storyContinuation ||
+        initiativeSignals.plannedEvent !== undefined ||
+        initiativeSignals.resolvedEventSummary !== undefined)
+    ) {
+      intent = "casual_chat";
+      initiativeSignals = detectInitiativeSignals(
+        normalized,
+        intent,
+        userMood,
+        topicContinuity,
+      );
+    }
     const expectsAnswer = intent === "question" || intent === "command" || intent === "opinion_request";
     const expectsEmotionalResponse =
       intent === "emotional_share" ||
@@ -218,6 +259,8 @@ export const defaultConversationAnalyzer: ConversationAnalyzer = Object.freeze({
       confidence: confidenceOf(intent, normalized),
       community,
       pragmatics,
+      topicContinuity,
+      initiativeSignals,
     });
   },
 });

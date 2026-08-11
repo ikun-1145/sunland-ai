@@ -431,6 +431,13 @@ function isSocialDialogueIntent(turn: DialogueTurnContext): boolean {
   );
 }
 
+function hasConfidentTopicContinuity(turn: DialogueTurnContext): boolean {
+  return turn.understanding.topicContinuity.needsClarification ||
+    turn.understanding.topicContinuity.references.some(
+      ({ confidence }) => confidence >= 0.7,
+    );
+}
+
 function isBlockedSideEffectFailure(
   parsed: Extract<ParseResult, { readonly type: "unknown" }>,
 ): boolean {
@@ -943,6 +950,7 @@ export function createSunlandEngine(options: SunlandEngineOptions = {}): Sunland
             ? {}
             : { jokeConcept: dialoguePlan.socialStrategy.jokeConcept }),
           banterUsed: dialoguePlan.socialStrategy.allowBanter,
+          initiativeAction: dialoguePlan.initiative.action,
         },
       );
       let canCommit = semanticContextMode === "enabled";
@@ -1129,7 +1137,8 @@ export function createSunlandEngine(options: SunlandEngineOptions = {}): Sunland
         );
       case "no-understanding":
         if (
-          !isBlockedSideEffectFailure(adaptation.failure) &&
+          (!isBlockedSideEffectFailure(adaptation.failure) ||
+            hasConfidentTopicContinuity(dialogueTurn)) &&
           (
             !isSocialDialogueIntent(dialogueTurn) ||
             (
@@ -1142,9 +1151,22 @@ export function createSunlandEngine(options: SunlandEngineOptions = {}): Sunland
         ) {
           return fastDialogueResult();
         }
-        return resultWithoutContext(
-          respondToParseResult(adaptation.failure, observation, {}, dialogueTurn),
-        );
+        {
+          const response = respondToParseResult(
+            adaptation.failure,
+            observation,
+            {},
+            dialogueTurn,
+          );
+          const retainsConversationState =
+            nextConversationState.workingMemory.topics.length > 0 ||
+            (semanticContext.conversationState?.workingMemory.topics.length ?? 0) > 0 ||
+            nextConversationState.initiative.openLoops.length > 0 ||
+            (semanticContext.conversationState?.initiative.openLoops.length ?? 0) > 0;
+          return retainsConversationState
+            ? resultWithContext(response)
+            : resultWithoutContext(response);
+        }
       case "fallback-legacy":
         if (
           (

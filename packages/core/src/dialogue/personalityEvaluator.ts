@@ -1,4 +1,5 @@
 import { assistantOpeningKey } from "@/personality/variation";
+import type { InitiativeDecision, InitiativeMetrics } from "@/types";
 
 export interface PersonalityMetrics {
   readonly assistantLikeScore: number;
@@ -47,5 +48,65 @@ export function evaluatePersonalityResponses(
     followUpOveruseScore: ratio(followUpCount, responses.length),
     furryOveruseScore: ratio(furryCount, responses.length),
     verbosityScore: ratio(verboseCount, responses.length),
+  });
+}
+
+export interface InitiativeMetricTurn {
+  readonly conversationId?: string;
+  readonly input: string;
+  readonly response: string;
+  readonly initiative: InitiativeDecision;
+  readonly targetTopicAge?: number;
+}
+
+const EXPLICIT_ENDING = /(?:不说了|不聊了|先这样|就这样|回头再说|先睡了|晚安)/u;
+const BOREDOM_INPUT = /(?:好无聊|无聊死了|不知道干嘛|没事干|闲得慌)/u;
+const SIGNIFICANT_INITIATIVE = new Set<InitiativeDecision["action"]>([
+  "follow_up", "expand", "resume_topic", "offer_related_topic",
+]);
+
+export function evaluateInitiativeTurns(
+  turns: readonly InitiativeMetricTurn[],
+): InitiativeMetrics {
+  let consecutiveQuestions = 0;
+  let overQuestioning = 0;
+  let initiativeCount = 0;
+  let deadConversation = 0;
+  let forcedResume = 0;
+  let poorClosure = 0;
+  let staleRevival = 0;
+  let previousConversationId: string | undefined;
+
+  for (const turn of turns) {
+    if (
+      turn.conversationId !== undefined &&
+      turn.conversationId !== previousConversationId
+    ) {
+      consecutiveQuestions = 0;
+      previousConversationId = turn.conversationId;
+    }
+    const askedQuestion = /[？?]/u.test(turn.response);
+    consecutiveQuestions = askedQuestion ? consecutiveQuestions + 1 : 0;
+    if (consecutiveQuestions >= 3) overQuestioning += 1;
+    if (SIGNIFICANT_INITIATIVE.has(turn.initiative.action)) initiativeCount += 1;
+    if (BOREDOM_INPUT.test(turn.input) && turn.initiative.action === "none") {
+      deadConversation += 1;
+    }
+    if (turn.initiative.action === "resume_topic" && !BOREDOM_INPUT.test(turn.input)) {
+      forcedResume += 1;
+    }
+    if (EXPLICIT_ENDING.test(turn.input) && askedQuestion) poorClosure += 1;
+    if (turn.initiative.action === "resume_topic" && (turn.targetTopicAge ?? 0) > 12) {
+      staleRevival += 1;
+    }
+  }
+
+  return Object.freeze({
+    overQuestioningScore: ratio(overQuestioning, turns.length),
+    overInitiativeScore: ratio(initiativeCount, turns.length),
+    deadConversationScore: ratio(deadConversation, turns.length),
+    forcedTopicResumeScore: ratio(forcedResume, turns.length),
+    poorClosureScore: ratio(poorClosure, turns.length),
+    staleTopicRevivalScore: ratio(staleRevival, turns.length),
   });
 }

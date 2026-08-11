@@ -36,6 +36,8 @@ import {
 } from "./frostPersona";
 import { renderFrostCommunityDialogue } from "./communityDialogue";
 import { renderFrostSocialDialogue } from "./socialDialogue";
+import { renderFrostTopicDialogue } from "./topicDialogue";
+import { renderFrostInitiativeDialogue } from "./initiativeDialogue";
 import {
   CAPABILITY_CLOSERS,
   CAPABILITY_OPENERS,
@@ -166,6 +168,10 @@ function renderReasoningResult(
 function renderDialogue(turn: DialogueTurnContext): string {
   const { intent, topic, userMood, conversationMode } = turn.understanding;
   const followUp = turn.plan.shouldAskFollowUp;
+  const topicResponse = renderFrostTopicDialogue(turn);
+  if (topicResponse !== null) return topicResponse;
+  const initiativeResponse = renderFrostInitiativeDialogue(turn);
+  if (initiativeResponse !== null) return initiativeResponse;
   const socialResponse = renderFrostSocialDialogue(turn);
   if (socialResponse !== null) return socialResponse;
   const communityResponse = renderFrostCommunityDialogue(turn);

@@ -14,3 +14,5 @@ export * from "./storage";
 export * from "./dialogue";
 export * from "./community";
 export * from "./pragmatics";
+export * from "./topic";
+export * from "./initiative";

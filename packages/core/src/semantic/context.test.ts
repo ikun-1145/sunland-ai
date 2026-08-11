@@ -161,6 +161,26 @@ describe("Semantic Conversation Context", () => {
       recentJokeConcepts: [],
       banterCooldown: 0,
       recentHostileTurns: 0,
+      workingMemory: {
+        version: 1,
+        topics: [],
+        recentEntities: [],
+        recentReferences: [],
+        currentTurn: 0,
+      },
+      initiative: {
+        version: 1,
+        drive: 0.35,
+        userEngagement: 0.45,
+        topicMomentum: 0,
+        userInitiativePreference: 0.45,
+        silenceTolerance: 0.65,
+        recentAssistantInitiativeCount: 0,
+        initiativeCooldownTurns: 0,
+        consecutiveQuestionTurns: 0,
+        followUpFatigue: 0,
+        openLoops: [],
+      },
     });
     expect(JSON.stringify(normalized)).not.toContain("must not survive");
     expect(normalizeSemanticContext({

@@ -10,6 +10,8 @@
 import type { PersonalityProfile, ResponseContext } from "@/types";
 import { renderPlainCommunityDialogue } from "./communityDialogue";
 import { renderPlainSocialDialogue } from "./socialDialogue";
+import { renderPlainTopicDialogue } from "./topicDialogue";
+import { renderPlainInitiativeDialogue } from "./initiativeDialogue";
 
 export const PlainPersonality: PersonalityProfile = {
   id: "plain",
@@ -23,6 +25,10 @@ export const PlainPersonality: PersonalityProfile = {
         // marker for uncertainty rather than a natural-language hedge.
         return context.plan.isUncertain ? `${context.plan.explanation}（不确定）` : context.plan.explanation;
       case "dialogue": {
+        const topicResponse = renderPlainTopicDialogue(context.turn);
+        if (topicResponse !== null) return topicResponse;
+        const initiativeResponse = renderPlainInitiativeDialogue(context.turn);
+        if (initiativeResponse !== null) return initiativeResponse;
         const socialResponse = renderPlainSocialDialogue(context.turn);
         if (socialResponse !== null) return socialResponse;
         const communityResponse = renderPlainCommunityDialogue(context.turn);

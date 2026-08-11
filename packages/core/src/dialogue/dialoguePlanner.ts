@@ -8,6 +8,7 @@ import type {
 } from "@/types";
 import { stableUnitInterval } from "@/utils/deterministic";
 import { planCommunityLanguage, planSocialResponse } from "@/community";
+import { planInitiative } from "./initiativePlanner";
 
 export interface DialoguePlanner {
   plan(
@@ -127,6 +128,7 @@ function rhythmFor(
 }
 
 function primaryGoal(understanding: ConversationUnderstanding): DialoguePrimaryGoal {
+  if (understanding.topicContinuity.needsClarification) return "clarify";
   switch (understanding.intent) {
     case "question":
     case "opinion_request":
@@ -177,10 +179,11 @@ export const defaultDialoguePlanner: DialoguePlanner = Object.freeze({
     state?: ConversationState,
     policy: DialoguePlanningPolicy = {},
   ): DialoguePlan {
-    const knowledgeTurn =
+    const knowledgeTurn = !understanding.topicContinuity.needsClarification && (
       understanding.intent === "question" ||
       understanding.intent === "command" ||
-      understanding.intent === "opinion_request";
+      understanding.intent === "opinion_request"
+    );
     const rhythm = rhythmFor(
       understanding,
       Math.min(1, Math.max(0, policy.followUpFrequency ?? 0.45)),
@@ -189,7 +192,8 @@ export const defaultDialoguePlanner: DialoguePlanner = Object.freeze({
       (state?.followUpCooldown ?? 0) === 0 &&
       (state?.recentFollowUpCount ?? 0) < 2 &&
       state?.lastAssistantAskedQuestion !== true;
-    const shouldAskFollowUp =
+    const proposedFollowUp =
+      !understanding.topicContinuity.needsClarification &&
       followUpAllowed &&
       rhythm.allowFollowUp &&
       followUpSample(
@@ -201,6 +205,14 @@ export const defaultDialoguePlanner: DialoguePlanner = Object.freeze({
       understanding.intent !== "farewell" &&
       understanding.intent !== "thanks" &&
       understanding.intent !== "reaction";
+    const initiative = planInitiative(
+      understanding,
+      state,
+      rhythm,
+      proposedFollowUp,
+      policy.followUpSelectionSeed,
+    );
+    const shouldAskFollowUp = initiative.action === "follow_up";
     const social = planSocialResponse(
       understanding.pragmatics,
       understanding.conversationMode,
@@ -233,6 +245,7 @@ export const defaultDialoguePlanner: DialoguePlanner = Object.freeze({
       ),
       socialStrategy: social.strategy,
       secondaryGoals: social.secondaryGoals,
+      initiative,
     });
   },
 });
