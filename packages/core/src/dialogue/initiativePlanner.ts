@@ -1,10 +1,10 @@
 import type {
   ConversationRhythm,
   ConversationState,
-  ConversationUnderstanding,
   InitiativeDecision,
   OpenLoop,
   TopicResumeCandidate,
+  TurnUnderstanding,
 } from "@/types";
 import { stableUnitInterval } from "@/utils/deterministic";
 import { createEmptyInitiativeState } from "./initiativeState";
@@ -88,7 +88,7 @@ function bestOpenLoop(state: ConversationState | undefined): OpenLoop | undefine
 }
 
 export function planInitiative(
-  understanding: ConversationUnderstanding,
+  understanding: TurnUnderstanding,
   state: ConversationState | undefined,
   rhythm: ConversationRhythm,
   proposedFollowUp: boolean,
@@ -106,7 +106,7 @@ export function planInitiative(
   if (understanding.pragmatics.requiresSafetyHandling) {
     return decision("none", 0, "safety-yield");
   }
-  if (signals.explicitClose || understanding.intent === "farewell") {
+  if (signals.explicitClose || understanding.socialInteraction === "farewell") {
     return decision("close_topic", 0.15, "user-close");
   }
   if (signals.returned) {

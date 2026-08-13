@@ -1,4 +1,5 @@
 import type { CommunityDomain } from "./community";
+import type { SemanticState } from "./turnUnderstanding";
 
 export type TopicEntityType =
   | "person"
@@ -33,6 +34,7 @@ export type TopicEventType =
   | "failed"
   | "succeeded"
   | "resolved"
+  | "pending"
   | "user_reaction";
 
 export interface TopicEvent {
@@ -40,6 +42,8 @@ export interface TopicEvent {
   /** Controlled, bounded summary; never a copy of the user message. */
   readonly summary: string;
   readonly turn: number;
+  /** Links the compatibility projection to the transient unified event. */
+  readonly semanticEventId?: string;
 }
 
 export interface WorkingConversationTopic {
@@ -53,6 +57,8 @@ export interface WorkingConversationTopic {
   readonly createdTurn: number;
   readonly lastMentionTurn: number;
   readonly events: readonly TopicEvent[];
+  /** Reality/object state; deliberately separate from chat-topic status. */
+  readonly semanticState?: SemanticState;
   readonly domains: readonly CommunityDomain[];
   readonly sourceMessageIds?: readonly string[];
 }

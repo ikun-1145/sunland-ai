@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { ConversationState, TopicContinuity } from "@/types";
 import { advanceConversationState, createEmptyConversationState } from "./conversationState";
-import { defaultConversationAnalyzer } from "./conversationAnalyzer";
 import { defaultDialoguePlanner } from "./dialoguePlanner";
+import { resolveDefaultTurnUnderstanding } from "@/understanding";
 import { TOPIC_CONTINUITY_EVALUATION_SET } from "./topicContinuityEvaluationSet";
 
 function evaluate(turns: readonly string[]): {
@@ -12,7 +12,7 @@ function evaluate(turns: readonly string[]): {
   let state = createEmptyConversationState();
   let continuity: TopicContinuity | undefined;
   for (const input of turns) {
-    const understanding = defaultConversationAnalyzer.analyze(input, state);
+    const understanding = resolveDefaultTurnUnderstanding(input, state);
     const plan = defaultDialoguePlanner.plan(understanding, state, {
       followUpSelectionSeed: input,
     });

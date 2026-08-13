@@ -39,6 +39,10 @@ import { renderFrostSocialDialogue } from "./socialDialogue";
 import { renderFrostTopicDialogue } from "./topicDialogue";
 import { renderFrostInitiativeDialogue } from "./initiativeDialogue";
 import {
+  dialogueIntentFromTurn,
+  userMoodFromTurn,
+} from "@/understanding/compatibility";
+import {
   CAPABILITY_CLOSERS,
   CAPABILITY_OPENERS,
   CREATOR_CLOSERS,
@@ -92,7 +96,7 @@ function withOptionalAccent(
 
 function emotionAcknowledgement(turn: DialogueTurnContext): string {
   if (!turn.plan.acknowledgeEmotion) return "";
-  switch (turn.understanding.userMood) {
+  switch (userMoodFromTurn(turn.understanding)) {
     case "frustrated":
       return "这事是真会磨人。";
     case "sad":
@@ -166,8 +170,14 @@ function renderReasoningResult(
 }
 
 function renderDialogue(turn: DialogueTurnContext): string {
-  const { intent, topic, userMood, conversationMode } = turn.understanding;
-  const followUp = turn.plan.shouldAskFollowUp;
+  const { topic, conversationMode } = turn.understanding;
+  const intent = dialogueIntentFromTurn(turn.understanding);
+  const userMood = userMoodFromTurn(turn.understanding);
+  const followUp = turn.plan.responseAct.primary === "ask_followup" ||
+    (
+      turn.plan.responseAct.secondary === "offer_help" &&
+      turn.plan.shouldAskFollowUp
+    );
   const topicResponse = renderFrostTopicDialogue(turn);
   if (topicResponse !== null) return topicResponse;
   const initiativeResponse = renderFrostInitiativeDialogue(turn);

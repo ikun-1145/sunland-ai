@@ -10,6 +10,7 @@ import type {
   TopicEntityType,
   TopicEvent,
   TopicEventType,
+  UnderstoodEvent,
   WorkingConversationTopic,
   WorkingTopicStatus,
 } from "@/types";
@@ -34,7 +35,7 @@ const TOPIC_STATUSES: ReadonlySet<WorkingTopicStatus> = new Set([
   "active", "background", "paused", "resolved", "abandoned",
 ]);
 const EVENT_TYPES: ReadonlySet<TopicEventType> = new Set([
-  "mentioned", "problem_reported", "attempted", "failed", "succeeded", "resolved", "user_reaction",
+  "mentioned", "problem_reported", "attempted", "failed", "succeeded", "resolved", "pending", "user_reaction",
 ]);
 const COMMUNITY_DOMAINS: ReadonlySet<WorkingConversationTopic["domains"][number]> = new Set([
   "furry", "acg", "art", "cosplay", "goods", "internet",
@@ -167,7 +168,13 @@ function normalizeEvent(value: unknown): TopicEvent | null {
     : undefined;
   const summary = boundedText(value.summary, 64);
   if (type === undefined || summary === undefined) return null;
-  return Object.freeze({ type, summary, turn: boundedTurn(value.turn) });
+  const semanticEventId = boundedText(value.semanticEventId, 80);
+  return Object.freeze({
+    type,
+    summary,
+    turn: boundedTurn(value.turn),
+    ...(semanticEventId === undefined ? {} : { semanticEventId }),
+  });
 }
 
 function normalizeTopic(value: unknown): WorkingConversationTopic | null {
@@ -200,6 +207,7 @@ function normalizeTopic(value: unknown): WorkingConversationTopic | null {
       .filter((domain, index, values) => values.indexOf(domain) === index)
       .slice(0, 3),
   );
+  const semanticState = normalizeSemanticState(value.semanticState);
   return Object.freeze({
     id,
     label,
@@ -215,8 +223,24 @@ function normalizeTopic(value: unknown): WorkingConversationTopic | null {
     createdTurn: boundedTurn(value.createdTurn),
     lastMentionTurn: boundedTurn(value.lastMentionTurn),
     events,
+    ...(semanticState === undefined ? {} : { semanticState }),
     domains,
   });
+}
+
+function normalizeSemanticState(
+  value: unknown,
+): WorkingConversationTopic["semanticState"] | undefined {
+  if (!isRecord(value)) return undefined;
+  const status = typeof value.status === "string" && [
+    "working", "failed", "resolved", "pending", "active", "inactive",
+    "available", "unavailable", "unknown",
+  ].includes(value.status)
+    ? value.status as NonNullable<WorkingConversationTopic["semanticState"]>["status"]
+    : undefined;
+  const label = boundedText(value.label, 48);
+  if (status === undefined || label === undefined) return undefined;
+  return Object.freeze({ label, status, confidence: boundedRatio(value.confidence) });
 }
 
 function normalizeReference(value: unknown): ResolvedReference | null {
@@ -493,6 +517,125 @@ function newTopic(
     lastMentionTurn: turn,
     events: Object.freeze([nextEvent]),
     domains: Object.freeze(domains.slice(0, 3)),
+  });
+}
+
+function topicEventFromUnderstanding(event: UnderstoodEvent): TopicEvent | null {
+  const type: TopicEventType | null = event.type === "failure"
+    ? event.evidenceIds.some((id) => id.includes("problem-reported"))
+      ? "problem_reported"
+      : "failed"
+    : event.type === "resolve" || event.type === "recover"
+      ? "resolved"
+      : event.type === "success" || event.type === "complete" ||
+          event.type === "receive" || event.type === "send"
+        ? "succeeded"
+        : event.type === "retry" || event.type === "update" || event.type === "change"
+          ? "attempted"
+          : event.type === "wait"
+            ? "pending"
+            : null;
+  if (type === null) return null;
+  const summary = type === "failed"
+    ? "统一理解判定当前事件失败"
+    : type === "resolved"
+      ? "统一理解判定问题已经解决"
+      : type === "succeeded"
+        ? "统一理解判定等待结果已经出现"
+        : type === "pending"
+          ? "统一理解判定结果仍在等待"
+          : "统一理解判定用户进行了新的尝试";
+  return Object.freeze({
+    type,
+    summary,
+    turn: 0,
+    semanticEventId: event.id,
+  });
+}
+
+/**
+ * Projects a confident unified event back into bounded Working Memory.
+ * The legacy topic regex remains the fallback that created `continuity`.
+ */
+export function applyUnifiedEventsToTopicContinuity(
+  continuity: TopicContinuity,
+  events: readonly UnderstoodEvent[],
+): TopicContinuity {
+  if (continuity.needsClarification) return continuity;
+  const semanticEvent = [...events]
+    .filter(({ confidence, target }) =>
+      confidence >= 0.75 &&
+      (target === undefined || target.confidence >= 0.7),
+    )
+    .at(-1);
+  if (semanticEvent === undefined) return continuity;
+  const targetId = semanticEvent.target?.id;
+  const active = continuity.activeTopic ?? (
+    targetId === undefined
+      ? undefined
+      : continuity.workingMemory.topics.find((topic) =>
+          topic.id === targetId || topic.entities.some(({ id }) => id === targetId),
+        )
+  );
+  if (active === undefined) return continuity;
+  const projected = topicEventFromUnderstanding(semanticEvent);
+  if (projected === null) return continuity;
+
+  const currentTurn = continuity.workingMemory.currentTurn;
+  const compatibleProjection = projected.type === "failed" &&
+      active.createdTurn === currentTurn &&
+      active.events.at(-1)?.type === "problem_reported"
+    ? Object.freeze({
+        ...projected,
+        type: "problem_reported" as const,
+        summary: "用户报告了再次发生的问题",
+      })
+    : projected;
+  const currentEvents = active.events.at(-1)?.turn === currentTurn
+    ? active.events.slice(0, -1)
+    : active.events;
+  const nextStatus: WorkingTopicStatus = projected.type === "resolved" &&
+      isProblemTopic(active)
+    ? "resolved"
+    : projected.type === "failed"
+      ? "active"
+    : active.status;
+  const nextActive: WorkingConversationTopic = Object.freeze({
+    ...active,
+    status: nextStatus,
+    ...(semanticEvent.stateAfter === undefined
+      ? {}
+      : { semanticState: semanticEvent.stateAfter }),
+    events: Object.freeze([
+      ...currentEvents,
+      Object.freeze({ ...compatibleProjection, turn: currentTurn }),
+    ].slice(-TOPIC_MEMORY_LIMITS.maximumEventsPerTopic)),
+  });
+  const nextTopics = Object.freeze(continuity.workingMemory.topics.map((topic) =>
+    topic.id === active.id ? nextActive : topic,
+  ));
+  const activeTopicId = nextStatus === "resolved"
+    ? undefined
+    : active.id;
+  const workingMemory = Object.freeze({
+    ...continuity.workingMemory,
+    ...(activeTopicId === undefined ? {} : { activeTopicId }),
+    topics: nextTopics,
+  });
+  if (activeTopicId === undefined) {
+    const { activeTopicId: _removed, ...withoutActive } = workingMemory;
+    return Object.freeze({
+      ...continuity,
+      transition: "resolved",
+      workingMemory: Object.freeze(withoutActive),
+      activeTopic: nextActive,
+    });
+  }
+  return Object.freeze({
+    ...continuity,
+    transition: continuity.activeTopic === undefined ? "resumed" : continuity.transition,
+    workingMemory,
+    activeTopic: nextActive,
   });
 }
 

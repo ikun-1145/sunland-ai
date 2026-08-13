@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { defaultConversationAnalyzer } from "./conversationAnalyzer";
 import { defaultDialoguePlanner } from "./dialoguePlanner";
+import { resolveDefaultTurnUnderstanding } from "@/understanding";
 import {
   advanceConversationState,
   completeConversationState,
@@ -9,7 +9,7 @@ import {
 
 describe("ConversationState rhythm signals", () => {
   it("records actual follow-ups and makes the next planner turn back off", () => {
-    const firstUnderstanding = defaultConversationAnalyzer.analyze("我刚吃完饭");
+    const firstUnderstanding = resolveDefaultTurnUnderstanding("我刚吃完饭");
     const firstPlan = defaultDialoguePlanner.plan(firstUnderstanding);
     const advanced = advanceConversationState(
       createEmptyConversationState(),
@@ -22,7 +22,7 @@ describe("ConversationState rhythm signals", () => {
       assistantOpeningKey: "opening-first",
       communityLanguageUsed: false,
     });
-    const nextUnderstanding = defaultConversationAnalyzer.analyze("火锅", completed);
+    const nextUnderstanding = resolveDefaultTurnUnderstanding("火锅", completed);
     const nextPlan = defaultDialoguePlanner.plan(nextUnderstanding, completed);
 
     expect(completed).toMatchObject({
@@ -36,7 +36,7 @@ describe("ConversationState rhythm signals", () => {
   it("bounds relationship growth instead of manufacturing deep attachment", () => {
     let state = createEmptyConversationState();
     for (let index = 0; index < 100; index += 1) {
-      const understanding = defaultConversationAnalyzer.analyze("哈哈哈哈", state);
+      const understanding = resolveDefaultTurnUnderstanding("哈哈哈哈", state);
       const plan = defaultDialoguePlanner.plan(understanding, state);
       state = completeConversationState(
         advanceConversationState(state, understanding, plan),

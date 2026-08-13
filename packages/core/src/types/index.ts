@@ -16,3 +16,4 @@ export * from "./community";
 export * from "./pragmatics";
 export * from "./topic";
 export * from "./initiative";
+export * from "./turnUnderstanding";

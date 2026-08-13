@@ -15,6 +15,7 @@ import type {
   InitiativeState,
   InitiativeTurnSignals,
 } from "./initiative";
+import type { ResponseAct, TurnUnderstanding } from "./turnUnderstanding";
 
 /** Lightweight, privacy-safe contracts for chat-first turn planning. */
 export type DialogueIntent =
@@ -124,6 +125,7 @@ export interface DialoguePlan {
   readonly socialStrategy: SocialResponseStrategy;
   readonly secondaryGoals: readonly DialogueSecondaryGoal[];
   readonly initiative: InitiativeDecision;
+  readonly responseAct: ResponseAct;
 }
 
 export interface RelationshipState {
@@ -180,7 +182,7 @@ export interface AssistantResponseSignals {
 /** Transient hand-off to Personality; `raw` is never part of persisted state. */
 export interface DialogueTurnContext {
   readonly raw: string;
-  readonly understanding: ConversationUnderstanding;
+  readonly understanding: TurnUnderstanding;
   readonly plan: DialoguePlan;
   readonly state: ConversationState;
   readonly rememberedName?: string;

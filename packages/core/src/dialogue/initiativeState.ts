@@ -1,10 +1,10 @@
 import type {
-  ConversationUnderstanding,
   InitiativeAction,
   InitiativeState,
   OpenLoop,
   OpenLoopType,
   RelationshipState,
+  TurnUnderstanding,
 } from "@/types";
 import { hashString } from "@/utils/deterministic";
 
@@ -138,7 +138,7 @@ function openLoopId(summary: string, currentTurn: number): string {
 
 function advanceOpenLoops(
   previous: InitiativeState,
-  understanding: ConversationUnderstanding,
+  understanding: TurnUnderstanding,
 ): readonly OpenLoop[] {
   const currentTurn = understanding.topicContinuity.workingMemory.currentTurn;
   const activeTopic = understanding.topicContinuity.activeTopic;
@@ -203,7 +203,7 @@ function advanceOpenLoops(
 
 export function advanceInitiativeState(
   current: InitiativeState | undefined,
-  understanding: ConversationUnderstanding,
+  understanding: TurnUnderstanding,
   relationship: RelationshipState,
 ): InitiativeState {
   const previous = normalizeInitiativeState(current);
@@ -211,7 +211,7 @@ export function advanceInitiativeState(
   const targetEngagement = signals.explicitClose ? 0.05
     : signals.lowEngagement ? 0.14
       : signals.highEngagement ? 0.82
-        : understanding.intent === "reaction" ? 0.5
+        : understanding.speechAct === "reaction" ? 0.5
           : 0.42;
   const userEngagement = ratio(
     previous.userEngagement * 0.55 + targetEngagement * 0.45,

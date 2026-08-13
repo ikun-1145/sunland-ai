@@ -2,7 +2,7 @@ import type { ClarificationKind } from "@/types";
 
 /**
  * Core version follows the package's existing SemVer. Keep this constant in
- * sync with `symbolic-ai/package.json` whenever a Core release is cut.
+ * sync with `packages/core/package.json` whenever a Core release is cut.
  */
 export const SUNLAND_CORE_VERSION = "0.1.0" as const;
 

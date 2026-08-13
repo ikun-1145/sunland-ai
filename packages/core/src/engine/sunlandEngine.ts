@@ -39,6 +39,7 @@ import type {
   Relation,
   ResponseContext,
   StorageAdapter,
+  TurnUnderstanding,
 } from "@/types";
 import { CoreRelations, MemoryKeys } from "@/types";
 import {
@@ -104,6 +105,12 @@ import {
   type UnderstandingDecision,
   type UnderstandingPolicy,
 } from "@/semantic";
+import {
+  createTurnCandidatePool,
+  dialogueIntentFromTurn,
+  resolveTurnUnderstanding,
+} from "@/understanding";
+import { applyUnifiedEventsToTopicContinuity } from "@/dialogue/topicTracker";
 
 export type {
   SemanticContextMode,
@@ -209,6 +216,8 @@ export interface SunlandProcessOptions {
 export interface SunlandProcessResult {
   readonly response: string;
   readonly semanticContextUpdate: SemanticContextUpdate;
+  /** Transient resolved interpretation for evaluation and host diagnostics. */
+  readonly understanding: TurnUnderstanding;
   readonly observationSummary?: ObservationSummary;
 }
 
@@ -386,18 +395,18 @@ function shouldUseFastDialogue(
       return false;
     }
     if (parsed.intent === "Greeting") {
-      return turn.understanding.intent === "greeting";
+      return turn.understanding.socialInteraction === "greeting";
     }
     if (parsed.intent === "Thanks") {
-      return turn.understanding.intent === "thanks";
+      return turn.understanding.socialInteraction === "thanks";
     }
     if (parsed.intent === "Farewell") {
-      return turn.understanding.intent === "farewell";
+      return turn.understanding.socialInteraction === "farewell";
     }
     return false;
   }
 
-  switch (turn.understanding.intent) {
+  switch (dialogueIntentFromTurn(turn.understanding)) {
     case "greeting":
     case "thanks":
     case "farewell":
@@ -425,9 +434,9 @@ function shouldUseFastDialogue(
 
 function isSocialDialogueIntent(turn: DialogueTurnContext): boolean {
   return (
-    turn.understanding.intent === "greeting" ||
-    turn.understanding.intent === "thanks" ||
-    turn.understanding.intent === "farewell"
+    turn.understanding.socialInteraction === "greeting" ||
+    turn.understanding.socialInteraction === "thanks" ||
+    turn.understanding.socialInteraction === "farewell"
   );
 }
 
@@ -839,8 +848,49 @@ export function createSunlandEngine(options: SunlandEngineOptions = {}): Sunland
       input,
       semanticContext.conversationState,
     );
+    const legacyResult: ParseResult = parser.parse(input);
+    let analysis: SemanticAnalysis | undefined;
+    if (semanticMode !== "off") {
+      try {
+        analysis = semanticAnalyze(
+          input,
+          semanticContextMode === "enabled"
+            ? semanticContext
+            : undefined,
+          conversationUnderstanding.community,
+        );
+      } catch {
+        analysis = undefined;
+      }
+    }
+    const resolvedTurnUnderstanding = resolveTurnUnderstanding(
+      createTurnCandidatePool({
+        rawInput: input,
+        parserResult: legacyResult,
+        conversation: conversationUnderstanding,
+        ...(analysis === undefined ? {} : { semanticAnalysis: analysis }),
+      }),
+    );
+    const unifiedTopicContinuity = applyUnifiedEventsToTopicContinuity(
+      resolvedTurnUnderstanding.topicContinuity,
+      resolvedTurnUnderstanding.events,
+    );
+    const turnUnderstanding = unifiedTopicContinuity ===
+        resolvedTurnUnderstanding.topicContinuity
+      ? resolvedTurnUnderstanding
+      : Object.freeze({
+          ...resolvedTurnUnderstanding,
+          topicContinuity: unifiedTopicContinuity,
+          topicRelation: Object.freeze({
+            ...resolvedTurnUnderstanding.topicRelation,
+            relation: unifiedTopicContinuity.transition,
+            ...(unifiedTopicContinuity.activeTopic === undefined
+              ? {}
+              : { topicId: unifiedTopicContinuity.activeTopic.id }),
+          }),
+        });
     const dialoguePlan = defaultDialoguePlanner.plan(
-      conversationUnderstanding,
+      turnUnderstanding,
       semanticContext.conversationState,
       {
         ...(personality.id === "frost"
@@ -855,7 +905,7 @@ export function createSunlandEngine(options: SunlandEngineOptions = {}): Sunland
     );
     const nextConversationState = advanceConversationState(
       semanticContext.conversationState,
-      conversationUnderstanding,
+      turnUnderstanding,
       dialoguePlan,
     );
     const rememberedName = dialoguePlan.useMemory
@@ -863,7 +913,7 @@ export function createSunlandEngine(options: SunlandEngineOptions = {}): Sunland
       : undefined;
     const dialogueTurn: DialogueTurnContext = Object.freeze({
       raw: input,
-      understanding: conversationUnderstanding,
+      understanding: turnUnderstanding,
       plan: dialoguePlan,
       state: nextConversationState,
       ...(rememberedName === undefined ? {} : { rememberedName }),
@@ -920,6 +970,7 @@ export function createSunlandEngine(options: SunlandEngineOptions = {}): Sunland
         return Object.freeze({
           response: result.response,
           semanticContextUpdate: result.semanticContextUpdate,
+          understanding: result.understanding,
           observationSummary: sanitized,
         });
       } catch {
@@ -976,15 +1027,21 @@ export function createSunlandEngine(options: SunlandEngineOptions = {}): Sunland
             })
           : noContextUpdate();
       return finishWithObservation(
-        Object.freeze({ response, semanticContextUpdate }),
+        Object.freeze({
+          response,
+          semanticContextUpdate,
+          understanding: turnUnderstanding,
+        }),
       );
     };
     const resultWithoutContext = (response: string): SunlandProcessResult =>
       finishWithObservation(
-        Object.freeze({ response, semanticContextUpdate: noContextUpdate() }),
+        Object.freeze({
+          response,
+          semanticContextUpdate: noContextUpdate(),
+          understanding: turnUnderstanding,
+        }),
       );
-
-    const legacyResult: ParseResult = parser.parse(input);
     lastSemanticShadow = null;
     const fastDialogueResult = (
       adoptedResult?: ParseResult,
@@ -1015,19 +1072,12 @@ export function createSunlandEngine(options: SunlandEngineOptions = {}): Sunland
       );
     }
 
-    let analysis: SemanticAnalysis;
     let decision: UnderstandingDecision;
     let adaptation: SemanticAdoptionResult;
     const semanticStartedAt =
       observation === undefined ? null : safeObservationNow();
     try {
-      analysis = semanticAnalyze(
-        input,
-        semanticContextMode === "enabled"
-          ? semanticContext
-          : undefined,
-        conversationUnderstanding.community,
-      );
+      if (analysis === undefined) throw new Error("semantic-analysis-unavailable");
       decision = semanticPlan(
         analysis,
         options.understandingPolicy,
@@ -1106,6 +1156,10 @@ export function createSunlandEngine(options: SunlandEngineOptions = {}): Sunland
       );
     }
 
+    if (turnUnderstanding.topicRelation.ambiguous) {
+      return fastDialogueResult();
+    }
+
     switch (adaptation.kind) {
       case "adopt":
         if (shouldUseFastDialogue(adaptation.result, dialogueTurn)) {
@@ -1127,8 +1181,11 @@ export function createSunlandEngine(options: SunlandEngineOptions = {}): Sunland
         );
       case "clarification":
         if (
-          !isSocialDialogueIntent(dialogueTurn) &&
-          shouldUseFastDialogue(legacyResult, dialogueTurn)
+          dialogueTurn.understanding.topicRelation.ambiguous ||
+          (
+            !isSocialDialogueIntent(dialogueTurn) &&
+            shouldUseFastDialogue(legacyResult, dialogueTurn)
+          )
         ) {
           return fastDialogueResult();
         }

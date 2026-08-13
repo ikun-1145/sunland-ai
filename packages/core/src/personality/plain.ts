@@ -12,6 +12,10 @@ import { renderPlainCommunityDialogue } from "./communityDialogue";
 import { renderPlainSocialDialogue } from "./socialDialogue";
 import { renderPlainTopicDialogue } from "./topicDialogue";
 import { renderPlainInitiativeDialogue } from "./initiativeDialogue";
+import {
+  dialogueIntentFromTurn,
+  userMoodFromTurn,
+} from "@/understanding/compatibility";
 
 export const PlainPersonality: PersonalityProfile = {
   id: "plain",
@@ -33,8 +37,14 @@ export const PlainPersonality: PersonalityProfile = {
         if (socialResponse !== null) return socialResponse;
         const communityResponse = renderPlainCommunityDialogue(context.turn);
         if (communityResponse !== null) return communityResponse;
-        const { intent, topic, userMood, conversationMode } = context.turn.understanding;
-        const followUp = context.turn.plan.shouldAskFollowUp;
+        const { topic, conversationMode } = context.turn.understanding;
+        const intent = dialogueIntentFromTurn(context.turn.understanding);
+        const userMood = userMoodFromTurn(context.turn.understanding);
+        const followUp = context.turn.plan.responseAct.primary === "ask_followup" ||
+          (
+            context.turn.plan.responseAct.secondary === "offer_help" &&
+            context.turn.plan.shouldAskFollowUp
+          );
         if (intent === "greeting") return "你好。有什么想聊的？";
         if (intent === "thanks") return "不客气。";
         if (intent === "farewell") return /晚安/u.test(context.turn.raw) ? "晚安，早点休息。" : "再见。";

@@ -2,7 +2,6 @@ import type {
   ConversationMode,
   ConversationState,
   ConversationTopic,
-  ConversationUnderstanding,
   AssistantResponseSignals,
   DialogueIntent,
   DialoguePlan,
@@ -10,7 +9,12 @@ import type {
   DialogueTone,
   RelationshipState,
   UserMood,
+  TurnUnderstanding,
 } from "@/types";
+import {
+  dialogueIntentFromTurn,
+  userMoodFromTurn,
+} from "@/understanding/compatibility";
 import {
   advanceCommunityContext,
   COMMUNITY_LANGUAGE_COOLDOWN_TURNS,
@@ -195,17 +199,19 @@ export function normalizeConversationState(value: unknown): ConversationState | 
 
 export function advanceConversationState(
   current: ConversationState | undefined,
-  understanding: ConversationUnderstanding,
+  understanding: TurnUnderstanding,
   plan: DialoguePlan,
 ): ConversationState {
   const previous = current ?? createEmptyConversationState();
+  const intent = dialogueIntentFromTurn(understanding);
+  const userMood = userMoodFromTurn(understanding);
   const familiarity = Math.min(
     0.65,
     previous.relationship.familiarity + 0.04,
   );
   const isRelaxedTurn =
     understanding.conversationMode === "casual" ||
-    understanding.intent === "reaction";
+    intent === "reaction";
   const relationship = Object.freeze({
     familiarity,
     casualness: Math.min(
@@ -215,8 +221,8 @@ export function advanceConversationState(
     teasingPermission: Math.min(
       0.35,
       previous.relationship.teasingPermission +
-        (understanding.userMood === "playful" ||
-        understanding.intent === "reaction"
+        (userMood === "playful" ||
+        intent === "reaction"
           ? 0.04
           : 0),
     ),
@@ -234,11 +240,11 @@ export function advanceConversationState(
 
   return Object.freeze({
     ...(recentTopic === undefined ? {} : { recentTopic }),
-    currentMood: understanding.userMood,
+    currentMood: userMood,
     conversationMode: understanding.conversationMode,
     relationship,
     recentAssistantTone: plan.tone,
-    lastUserIntent: understanding.intent,
+    lastUserIntent: intent,
     lastInteractionType: plan.primaryGoal,
     followUpCooldown: previous.followUpCooldown,
     recentFollowUpCount: previous.recentFollowUpCount,

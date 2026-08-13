@@ -66,7 +66,7 @@ export function renderFrostInitiativeDialogue(turn: DialogueTurnContext): string
   if (turn.understanding.pragmatics.requiresSafetyHandling) return null;
   const signals = turn.understanding.initiativeSignals;
   if (turn.plan.initiative.action === "close_topic" && signals.explicitClose) {
-    if (turn.understanding.intent === "farewell") return null;
+    if (turn.understanding.socialInteraction === "farewell") return null;
     return frostDeparture(turn) ?? "行，那先到这儿。";
   }
   if (signals.plannedEvent !== undefined) {
@@ -97,7 +97,7 @@ export function renderPlainInitiativeDialogue(turn: DialogueTurnContext): string
   if (turn.understanding.pragmatics.requiresSafetyHandling) return null;
   const signals = turn.understanding.initiativeSignals;
   if (turn.plan.initiative.action === "close_topic" && signals.explicitClose) {
-    if (turn.understanding.intent === "farewell") return null;
+    if (turn.understanding.socialInteraction === "farewell") return null;
     return plainDeparture(turn) ?? "好，那先到这里。";
   }
   if (signals.plannedEvent !== undefined) {

@@ -12,7 +12,6 @@
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
     "types": ["@cloudflare/workers-types"],
-    "baseUrl": ".",
     "paths": {
       "@/*": ["../../packages/core/src/*"]
     }

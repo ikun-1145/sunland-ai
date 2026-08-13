@@ -1,6 +1,6 @@
 # Sunland AI project memory
 
-> Audience: maintainers and coding agents. Last verified against the repository on 2026-08-11. Update this document when a stable architectural fact changes; do not use it as a task log.
+> Audience: maintainers and coding agents. Last verified against the repository on 2026-08-12. Update this document when a stable architectural fact changes; do not use it as a task log.
 
 ## Product identity
 
@@ -29,10 +29,25 @@ The Durable Object exists to serialize a user's operations and hold the one-minu
 
 - Public source boundary: `packages/core/src/sdk.ts` and package import `@sunland-ai/core`.
 - Composition root: `packages/core/src/engine/sunlandEngine.ts`.
-- Major layers: parser, semantic planning, community language/pragmatics, dialogue tracking, Knowledge, Memory, graph reasoning, response planning, observation summaries, and personality.
+- Major layers: parser and semantic producers, unified Turn Understanding, community language/pragmatics, dialogue tracking, Knowledge, Memory, graph reasoning, response planning, observation summaries, and personality.
 - Default personality: Frost; Plain is also registered.
 - No network, authentication, Supabase, Cloudflare, React, or DOM dependencies.
 - Public runtime surface is frozen by `contracts/sdk-api-surface.v0.1.0.json` at 70 exports for Core `0.1.0`.
+
+### Core turn-understanding path
+
+```text
+Raw input + conversation state
+  -> existing Parser, Semantic, Dialogue, Community, Pragmatics, Social, and Topic producers
+  -> TurnUnderstanding candidate pool
+  -> deterministic Understanding Resolver
+  -> TurnUnderstanding
+  -> existing Dialogue Planner
+  -> persona-neutral ResponseAct inside DialoguePlan
+  -> Frost or Plain renderer
+```
+
+`TurnUnderstanding` is the only input accepted by Dialogue Planner, conversation-state advancement, and Initiative planning. Existing producer outputs and Stage 15 state are retained behind one-way compatibility adapters during gradual migration; these migrated planning modules must not independently reclassify the raw input. The Core process result exposes the resolved understanding for evaluation and host diagnostics, but `apps/api` deliberately omits it and raw input is not part of persisted conversation state.
 
 ### `apps/api`
 
@@ -94,6 +109,7 @@ See [`api.md`](api.md) for request examples and limits.
 - `packages/core/docs/beta-launch-audit-v0.1.0.md` and `beta-test-checklist.md` describe an earlier Web/Flutter local-Bundle integration and are retained only as historical evidence.
 - Some source comments still mention the earlier local Provider or bundle shape. Current runtime imports and tests take precedence.
 - The legacy-table RLS hardening gate remains intentionally deferred; preparation migrations must not be described as complete isolation for those legacy tables.
+- Unified Turn Understanding is an MVP integration layer: existing component outputs and compatibility labels remain while producers are migrated toward smaller atomic candidates. Context stores have not been consolidated.
 
 ## Stable engineering decisions
 
@@ -104,6 +120,7 @@ See [`api.md`](api.md) for request examples and limits.
 5. Atomic turns: state changes and replayable turn results commit together under optimistic concurrency.
 6. Safe semantics: understanding candidates can propose interpretation but cannot bypass write safety.
 7. Historical migration safety: legacy RLS enforcement waits for the signed forced-upgrade gate.
+8. One resolved turn bus: existing understanding modules contribute evidence to `TurnUnderstanding`; Dialogue and Initiative consume that resolved result rather than choosing among parallel intent labels.
 
 ## Maintenance protocol
 

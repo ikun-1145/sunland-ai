@@ -21,6 +21,8 @@ describe("remote Core session", () => {
     ]));
     expect(result.context).toMatchObject({ schemaVersion: 1, version: 1 });
     expect(result.observationSummary).toBeTruthy();
+    expect(result).not.toHaveProperty("understanding");
+    expect(JSON.stringify(result)).not.toContain("rawInput");
   });
 
   it("keeps user memory independent from profile fields", () => {

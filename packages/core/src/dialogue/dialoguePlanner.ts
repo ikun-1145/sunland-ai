@@ -1,18 +1,23 @@
 import type {
   ConversationState,
-  ConversationUnderstanding,
   DialoguePlan,
   DialoguePrimaryGoal,
   DialogueTone,
   ConversationRhythm,
+  ResponseAct,
+  TurnUnderstanding,
 } from "@/types";
 import { stableUnitInterval } from "@/utils/deterministic";
 import { planCommunityLanguage, planSocialResponse } from "@/community";
+import {
+  dialogueIntentFromTurn,
+  userMoodFromTurn,
+} from "@/understanding/compatibility";
 import { planInitiative } from "./initiativePlanner";
 
 export interface DialoguePlanner {
   plan(
-    understanding: ConversationUnderstanding,
+    understanding: TurnUnderstanding,
     state?: ConversationState,
     policy?: DialoguePlanningPolicy,
   ): DialoguePlan;
@@ -27,15 +32,15 @@ export interface DialoguePlanningPolicy {
 }
 
 function followUpSample(
-  understanding: ConversationUnderstanding,
+  understanding: TurnUnderstanding,
   state: ConversationState | undefined,
   selectionSeed: string | undefined,
 ): number {
   const fallbackSeed = [
-    understanding.intent,
+    dialogueIntentFromTurn(understanding),
     understanding.conversationMode,
     understanding.topic,
-    understanding.userMood,
+    userMoodFromTurn(understanding),
   ].join(":");
   const familiarity = state?.relationship.familiarity ?? 0;
   return stableUnitInterval(
@@ -44,19 +49,20 @@ function followUpSample(
 }
 
 function rhythmFor(
-  understanding: ConversationUnderstanding,
+  understanding: TurnUnderstanding,
   followUpFrequency: number,
 ): ConversationRhythm {
+  const intent = dialogueIntentFromTurn(understanding);
   if (understanding.conversationMode === "technical") {
     return Object.freeze({
-      targetSentenceCount: understanding.intent === "command" ? 4 : 3,
-      allowFollowUp: understanding.intent === "command",
+      targetSentenceCount: intent === "command" ? 4 : 3,
+      allowFollowUp: intent === "command",
       followUpProbability: Math.min(0.3, followUpFrequency),
       allowTopicExpansion: true,
       allowNaturalEnding: true,
     });
   }
-  switch (understanding.intent) {
+  switch (intent) {
     case "reaction":
     case "thanks":
     case "farewell":
@@ -127,16 +133,17 @@ function rhythmFor(
   }
 }
 
-function primaryGoal(understanding: ConversationUnderstanding): DialoguePrimaryGoal {
+function primaryGoal(understanding: TurnUnderstanding): DialoguePrimaryGoal {
   if (understanding.topicContinuity.needsClarification) return "clarify";
-  switch (understanding.intent) {
+  const intent = dialogueIntentFromTurn(understanding);
+  switch (intent) {
     case "question":
     case "opinion_request":
       return "answer";
     case "command":
       return "help_task";
     case "emotional_share":
-      return understanding.userMood === "sad" ? "comfort" : "encourage";
+      return userMoodFromTurn(understanding) === "sad" ? "comfort" : "encourage";
     case "reaction":
       return "react";
     case "storytelling":
@@ -151,9 +158,9 @@ function primaryGoal(understanding: ConversationUnderstanding): DialoguePrimaryG
   }
 }
 
-function toneFor(understanding: ConversationUnderstanding): DialogueTone {
+function toneFor(understanding: TurnUnderstanding): DialogueTone {
   if (understanding.conversationMode === "technical") return "technical";
-  switch (understanding.userMood) {
+  switch (userMoodFromTurn(understanding)) {
     case "sad":
     case "anxious":
       return "gentle";
@@ -173,16 +180,82 @@ function toneFor(understanding: ConversationUnderstanding): DialogueTone {
   }
 }
 
+function responseActFor(
+  understanding: TurnUnderstanding,
+  goal: DialoguePrimaryGoal,
+  shouldAskFollowUp: boolean,
+  joinJoke: boolean,
+): ResponseAct {
+  if (understanding.pragmatics.requiresSafetyHandling) {
+    return Object.freeze({
+      primary: "comfort",
+      secondary: "acknowledge_emotion",
+      confidence: 1,
+    });
+  }
+  if (understanding.topicRelation.ambiguous || goal === "clarify") {
+    return Object.freeze({ primary: "ask_clarification", confidence: 0.98 });
+  }
+  if (joinJoke) {
+    return Object.freeze({ primary: "joke", confidence: understanding.confidence });
+  }
+  if (goal === "comfort") {
+    return Object.freeze({
+      primary: "comfort",
+      secondary: understanding.userNeeds.some(({ need }) => need === "solve_problem")
+        ? "offer_help"
+        : "acknowledge_emotion",
+      confidence: understanding.confidence,
+    });
+  }
+  if (shouldAskFollowUp) {
+    return Object.freeze({
+      primary: "ask_followup",
+      secondary: understanding.userNeeds.some(({ need }) => need === "solve_problem")
+        ? "offer_help"
+        : "continue_topic",
+      confidence: understanding.confidence,
+    });
+  }
+  if (goal === "encourage" || goal === "react" || goal === "chat") {
+    return Object.freeze({
+      primary: "acknowledge",
+      ...(understanding.userNeeds.some(({ need }) => need === "solve_problem")
+        ? { secondary: "offer_help" as const }
+        : understanding.userNeeds.some(({ need }) => need === "share_emotion")
+          ? { secondary: "acknowledge_emotion" as const }
+          : {}),
+      confidence: understanding.confidence,
+    });
+  }
+  if (goal === "explain") {
+    return Object.freeze({ primary: "explain", confidence: understanding.confidence });
+  }
+  if (goal === "help_task") {
+    return Object.freeze({
+      primary: "acknowledge",
+      secondary: "offer_help",
+      confidence: understanding.confidence,
+    });
+  }
+  return Object.freeze({
+    primary: "answer",
+    secondary: "provide_information",
+    confidence: understanding.confidence,
+  });
+}
+
 export const defaultDialoguePlanner: DialoguePlanner = Object.freeze({
   plan(
-    understanding: ConversationUnderstanding,
+    understanding: TurnUnderstanding,
     state?: ConversationState,
     policy: DialoguePlanningPolicy = {},
   ): DialoguePlan {
+    const intent = dialogueIntentFromTurn(understanding);
     const knowledgeTurn = !understanding.topicContinuity.needsClarification && (
-      understanding.intent === "question" ||
-      understanding.intent === "command" ||
-      understanding.intent === "opinion_request"
+      intent === "question" ||
+      intent === "command" ||
+      intent === "opinion_request"
     );
     const rhythm = rhythmFor(
       understanding,
@@ -201,10 +274,12 @@ export const defaultDialoguePlanner: DialoguePlanner = Object.freeze({
         state,
         policy.followUpSelectionSeed,
       ) < rhythm.followUpProbability &&
-      understanding.expectsContinuation &&
-      understanding.intent !== "farewell" &&
-      understanding.intent !== "thanks" &&
-      understanding.intent !== "reaction";
+      understanding.userNeeds.some(({ need }) =>
+        need === "continue_chat" || need === "solve_problem",
+      ) &&
+      intent !== "farewell" &&
+      intent !== "thanks" &&
+      intent !== "reaction";
     const initiative = planInitiative(
       understanding,
       state,
@@ -218,18 +293,21 @@ export const defaultDialoguePlanner: DialoguePlanner = Object.freeze({
       understanding.conversationMode,
       state,
     );
+    const goal = primaryGoal(understanding);
 
     return Object.freeze({
-      primaryGoal: primaryGoal(understanding),
+      primaryGoal: goal,
       useReasoning: knowledgeTurn,
       useKnowledge: knowledgeTurn,
-      useMemory: understanding.intent === "greeting",
+      useMemory: understanding.socialInteraction === "greeting",
       acknowledgeEmotion:
-        understanding.expectsEmotionalResponse ||
+        understanding.userNeeds.some(({ need }) =>
+          need === "receive_acknowledgement" || need === "share_emotion",
+        ) ||
         social.strategy.acknowledgeEmotion,
       shouldAskFollowUp,
       conversationDrive: shouldAskFollowUp
-        ? understanding.intent === "command"
+        ? intent === "command"
           ? "guide"
           : "invite"
         : "respond",
@@ -246,6 +324,12 @@ export const defaultDialoguePlanner: DialoguePlanner = Object.freeze({
       socialStrategy: social.strategy,
       secondaryGoals: social.secondaryGoals,
       initiative,
+      responseAct: responseActFor(
+        understanding,
+        goal,
+        shouldAskFollowUp,
+        social.strategy.joinJoke,
+      ),
     });
   },
 });

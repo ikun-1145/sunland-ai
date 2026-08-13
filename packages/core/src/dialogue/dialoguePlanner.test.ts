@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { defaultConversationAnalyzer } from "./conversationAnalyzer";
 import { defaultDialoguePlanner } from "./dialoguePlanner";
 import { createEmptyConversationState } from "./conversationState";
+import { resolveDefaultTurnUnderstanding } from "@/understanding";
 
 describe("DialoguePlanner", () => {
   it("keeps casual and emotional turns off the reasoning path", () => {
     for (const input of ["我刚吃完饭", "考试没考好，有点难受", "哈哈哈哈"]) {
-      const understanding = defaultConversationAnalyzer.analyze(input);
+      const understanding = resolveDefaultTurnUnderstanding(input);
       const plan = defaultDialoguePlanner.plan(understanding);
 
       expect(plan.useReasoning).toBe(false);
@@ -15,7 +15,7 @@ describe("DialoguePlanner", () => {
   });
 
   it("uses reasoning for technical questions while acknowledging mixed emotion", () => {
-    const understanding = defaultConversationAnalyzer.analyze(
+    const understanding = resolveDefaultTurnUnderstanding(
       "这个 bug 我搞了一下午还是不行，你帮我看看为什么",
     );
 
@@ -29,7 +29,7 @@ describe("DialoguePlanner", () => {
   });
 
   it("suppresses optional follow-ups during the cooldown window", () => {
-    const understanding = defaultConversationAnalyzer.analyze("我刚吃完饭");
+    const understanding = resolveDefaultTurnUnderstanding("我刚吃完饭");
 
     expect(defaultDialoguePlanner.plan(understanding).shouldAskFollowUp).toBe(true);
     expect(
@@ -41,7 +41,7 @@ describe("DialoguePlanner", () => {
   });
 
   it("uses follow-up frequency as a deterministic selection threshold", () => {
-    const understanding = defaultConversationAnalyzer.analyze("我刚吃完饭");
+    const understanding = resolveDefaultTurnUnderstanding("我刚吃完饭");
 
     expect(
       defaultDialoguePlanner.plan(understanding, undefined, {
@@ -49,20 +49,23 @@ describe("DialoguePlanner", () => {
         followUpSelectionSeed: "我刚吃完饭",
       }).shouldAskFollowUp,
     ).toBe(false);
-    expect(
-      defaultDialoguePlanner.plan(understanding, undefined, {
-        followUpFrequency: 0.2,
-        followUpSelectionSeed: "我刚吃完饭",
-      }).shouldAskFollowUp,
-    ).toBe(true);
+    const followUp = defaultDialoguePlanner.plan(understanding, undefined, {
+      followUpFrequency: 0.2,
+      followUpSelectionSeed: "我刚吃完饭",
+    });
+    expect(followUp.shouldAskFollowUp).toBe(true);
+    expect(followUp.responseAct).toMatchObject({
+      primary: "ask_followup",
+      secondary: "continue_topic",
+    });
   });
 
   it("assigns short rhythm to reactions and restrained rhythm to technical turns", () => {
     const reaction = defaultDialoguePlanner.plan(
-      defaultConversationAnalyzer.analyze("哈哈哈哈"),
+      resolveDefaultTurnUnderstanding("哈哈哈哈"),
     );
     const technical = defaultDialoguePlanner.plan(
-      defaultConversationAnalyzer.analyze("JWT 空算法为什么危险"),
+      resolveDefaultTurnUnderstanding("JWT 空算法为什么危险"),
     );
 
     expect(reaction.rhythm).toMatchObject({

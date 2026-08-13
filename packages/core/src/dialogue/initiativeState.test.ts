@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ConversationState } from "@/types";
-import { defaultConversationAnalyzer } from "./conversationAnalyzer";
 import { defaultDialoguePlanner } from "./dialoguePlanner";
+import { resolveDefaultTurnUnderstanding } from "@/understanding";
 import {
   advanceConversationState,
   completeConversationState,
@@ -14,7 +14,7 @@ import {
 import { rankTopicResumeCandidates } from "./initiativePlanner";
 
 function turn(state: ConversationState, input: string): ConversationState {
-  const understanding = defaultConversationAnalyzer.analyze(input, state);
+  const understanding = resolveDefaultTurnUnderstanding(input, state);
   const plan = defaultDialoguePlanner.plan(understanding, state, {
     followUpSelectionSeed: input,
   });
@@ -53,7 +53,7 @@ describe("Initiative State", () => {
       lastAssistantAskedQuestion: false,
       followUpCooldown: 0,
     };
-    const understanding = defaultConversationAnalyzer.analyze("我刚吃完饭", fatigued);
+    const understanding = resolveDefaultTurnUnderstanding("我刚吃完饭", fatigued);
     const plan = defaultDialoguePlanner.plan(understanding, fatigued, {
       followUpFrequency: 1,
       followUpSelectionSeed: "fatigue",
@@ -73,7 +73,7 @@ describe("Initiative State", () => {
         teasingPermission: 0.35,
       },
     };
-    const understanding = defaultConversationAnalyzer.analyze("我真的想死", familiar);
+    const understanding = resolveDefaultTurnUnderstanding("我真的想死", familiar);
     const plan = defaultDialoguePlanner.plan(understanding, familiar, {
       followUpFrequency: 1,
       followUpSelectionSeed: "safety",
@@ -118,7 +118,7 @@ describe("Initiative State", () => {
         followUpFatigue: 0,
       },
     };
-    const understanding = defaultConversationAnalyzer.analyze("好无聊", state);
+    const understanding = resolveDefaultTurnUnderstanding("好无聊", state);
     const plan = defaultDialoguePlanner.plan(understanding, state, {
       followUpSelectionSeed: "seed-0",
     });

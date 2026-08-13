@@ -3,7 +3,6 @@ import {
   advanceConversationState,
   completeConversationState,
   createEmptyConversationState,
-  defaultConversationAnalyzer,
   defaultDialoguePlanner,
   evaluateSocialResponses,
   normalizeConversationState,
@@ -13,12 +12,13 @@ import {
   renderPlainSocialDialogue,
 } from "@/personality/socialDialogue";
 import type { DialogueTurnContext } from "@/types";
+import { resolveDefaultTurnUnderstanding } from "@/understanding";
 
 function turn(
   raw: string,
   state = createEmptyConversationState(),
 ): DialogueTurnContext {
-  const understanding = defaultConversationAnalyzer.analyze(raw, state);
+  const understanding = resolveDefaultTurnUnderstanding(raw, state);
   const plan = defaultDialoguePlanner.plan(understanding, state, {
     followUpSelectionSeed: raw,
   });
@@ -28,7 +28,7 @@ function turn(
 describe("Social Intelligence planning", () => {
   it("keeps a mixed vent + technical request actionable", () => {
     const current = turn("太好了代码又崩了，帮我看看 bug");
-    expect(current.understanding.intent).toBe("command");
+    expect(current.understanding.primaryIntent).toBe("ask_help");
     expect(current.understanding.conversationMode).toBe("technical");
     expect(current.plan.socialStrategy).toMatchObject({
       answerLiterally: true,

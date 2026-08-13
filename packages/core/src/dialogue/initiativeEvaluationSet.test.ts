@@ -5,8 +5,8 @@ import {
   type SemanticContext,
 } from "@/semantic";
 import { createSunlandEngine } from "@/engine";
-import { defaultConversationAnalyzer } from "./conversationAnalyzer";
 import { defaultDialoguePlanner } from "./dialoguePlanner";
+import { resolveDefaultTurnUnderstanding } from "@/understanding";
 import {
   INITIATIVE_LOCAL_EVALUATION_SET,
   INITIATIVE_MULTI_TURN_EVALUATION_SET,
@@ -27,7 +27,7 @@ describe("Initiative Evaluation Set", () => {
 
   for (const candidate of INITIATIVE_LOCAL_EVALUATION_SET) {
     it(candidate.id, () => {
-      const understanding = defaultConversationAnalyzer.analyze(candidate.input);
+      const understanding = resolveDefaultTurnUnderstanding(candidate.input);
       const plan = defaultDialoguePlanner.plan(understanding, undefined, {
         followUpSelectionSeed: candidate.input,
       });
@@ -54,7 +54,7 @@ describe("Initiative Evaluation Set", () => {
       let finalAction = "none";
 
       for (const [index, input] of candidate.turns.entries()) {
-        const understanding = defaultConversationAnalyzer.analyze(
+        const understanding = resolveDefaultTurnUnderstanding(
           input,
           context.conversationState,
         );
@@ -105,7 +105,7 @@ describe("Initiative Evaluation Set", () => {
       const engine = createSunlandEngine({ semanticContextMode: "enabled" });
       let context: SemanticContext = createEmptySemanticContext();
       for (const [index, input] of candidate.turns.entries()) {
-        const understanding = defaultConversationAnalyzer.analyze(input, context.conversationState);
+        const understanding = resolveDefaultTurnUnderstanding(input, context.conversationState);
         const plan = defaultDialoguePlanner.plan(understanding, context.conversationState, {
           followUpSelectionSeed: input,
         });

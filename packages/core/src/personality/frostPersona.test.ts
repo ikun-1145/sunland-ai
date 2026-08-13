@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { DialogueTurnContext } from "@/types";
 import { createEmptyConversationState } from "@/dialogue/conversationState";
-import { defaultConversationAnalyzer } from "@/dialogue/conversationAnalyzer";
 import { defaultDialoguePlanner } from "@/dialogue/dialoguePlanner";
+import { resolveDefaultTurnUnderstanding } from "@/understanding";
 import {
   FROST_FURRY_EXPRESSION_POLICY,
   FROST_PERSONA_SPEC,
@@ -10,7 +10,7 @@ import {
 } from "./frostPersona";
 
 function turn(raw: string, cooldown = 0): DialogueTurnContext {
-  const understanding = defaultConversationAnalyzer.analyze(raw);
+  const understanding = resolveDefaultTurnUnderstanding(raw);
   const plan = defaultDialoguePlanner.plan(understanding);
   return {
     raw,

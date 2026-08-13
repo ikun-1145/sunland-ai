@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { ConversationState, ConversationUnderstanding } from "@/types";
-import { defaultConversationAnalyzer } from "./conversationAnalyzer";
+import type { ConversationState, TurnUnderstanding } from "@/types";
 import { defaultDialoguePlanner } from "./dialoguePlanner";
+import { resolveDefaultTurnUnderstanding } from "@/understanding";
 import {
   advanceConversationState,
   createEmptyConversationState,
@@ -14,8 +14,8 @@ import {
 function conversation() {
   let state: ConversationState = createEmptyConversationState();
   return {
-    turn(input: string): ConversationUnderstanding {
-      const understanding = defaultConversationAnalyzer.analyze(input, state);
+    turn(input: string): TurnUnderstanding {
+      const understanding = resolveDefaultTurnUnderstanding(input, state);
       const plan = defaultDialoguePlanner.plan(understanding, state, {
         followUpSelectionSeed: input,
       });

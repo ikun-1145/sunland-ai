@@ -4,10 +4,10 @@ import {
   createEmptySemanticContext,
   type SemanticContext,
 } from "@/semantic";
-import { defaultConversationAnalyzer } from "@/dialogue";
 import type {
-  ConversationUnderstanding,
+  TurnUnderstanding,
 } from "@/types";
+import { dialogueIntentFromTurn } from "@/understanding";
 import { createSunlandEngine, type SunlandEngine } from "./sunlandEngine";
 
 interface StressScenario {
@@ -19,7 +19,7 @@ interface StressScenario {
 interface ScenarioResult {
   readonly engine: SunlandEngine;
   readonly responses: readonly string[];
-  readonly understandings: readonly ConversationUnderstanding[];
+  readonly understandings: readonly TurnUnderstanding[];
   readonly contexts: readonly SemanticContext[];
 }
 
@@ -88,18 +88,15 @@ function runScenario(scenario: StressScenario): ScenarioResult {
   });
   let context = createEmptySemanticContext();
   const responses: string[] = [];
-  const understandings: ConversationUnderstanding[] = [];
+  const understandings: TurnUnderstanding[] = [];
   const contexts: SemanticContext[] = [];
 
   for (const [index, input] of scenario.inputs.entries()) {
-    understandings.push(defaultConversationAnalyzer.analyze(
-      input,
-      context.conversationState,
-    ));
     const result = engine.process(input, {
       semanticContext: context,
       turnId: `${scenario.id}-${index + 1}`,
     });
+    understandings.push(result.understanding);
     responses.push(result.response);
     context = applySemanticContextUpdate(context, result.semanticContextUpdate);
     contexts.push(context);
@@ -128,7 +125,7 @@ describe("Dialogue System Integration Audit multi-turn stress", () => {
         if (
           understanding.conversationMode !== "technical" &&
           ["casual_chat", "reaction", "emotional_share"].includes(
-            understanding.intent,
+            dialogueIntentFromTurn(understanding),
           )
         ) {
           expect(response, `${scenario.id}-${index + 1}`).not.toMatch(ASSISTANT_FLAVOR);
