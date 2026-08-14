@@ -141,6 +141,9 @@ export interface UnderstoodEvent {
   readonly evidenceIds: readonly string[];
 }
 
+/** Stage 16.1 name for the event carried by the unified turn bus. */
+export type SemanticEvent = UnderstoodEvent;
+
 export type TemporalRelationType =
   | "now"
   | "previously"

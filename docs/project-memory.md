@@ -1,6 +1,6 @@
 # Sunland AI project memory
 
-> Audience: maintainers and coding agents. Last verified against the repository on 2026-08-12. Update this document when a stable architectural fact changes; do not use it as a task log.
+> Audience: maintainers and coding agents. Last verified against the repository on 2026-08-14. Update this document when a stable architectural fact changes; do not use it as a task log.
 
 ## Product identity
 
@@ -48,6 +48,15 @@ Raw input + conversation state
 ```
 
 `TurnUnderstanding` is the only input accepted by Dialogue Planner, conversation-state advancement, and Initiative planning. Existing producer outputs and Stage 15 state are retained behind one-way compatibility adapters during gradual migration; these migrated planning modules must not independently reclassify the raw input. The Core process result exposes the resolved understanding for evaluation and host diagnostics, but `apps/api` deliberately omits it and raw input is not part of persisted conversation state.
+
+The unified bus also carries bounded semantic events, object-state transitions,
+relative temporal relations, ordered event sequences, and lightweight corrections.
+High-confidence failure or waiting events may establish a Topic when the legacy
+Topic recognizer has no match; otherwise the existing Topic path remains the
+fallback. Only controlled event ids and semantic-state labels are projected into
+Working Memory. A Topic's conversational status (active, background, resolved)
+is deliberately separate from the referenced object's semantic state (failed,
+pending, available, and so on).
 
 ### `apps/api`
 
@@ -109,7 +118,7 @@ See [`api.md`](api.md) for request examples and limits.
 - `packages/core/docs/beta-launch-audit-v0.1.0.md` and `beta-test-checklist.md` describe an earlier Web/Flutter local-Bundle integration and are retained only as historical evidence.
 - Some source comments still mention the earlier local Provider or bundle shape. Current runtime imports and tests take precedence.
 - The legacy-table RLS hardening gate remains intentionally deferred; preparation migrations must not be described as complete isolation for those legacy tables.
-- Unified Turn Understanding is an MVP integration layer: existing component outputs and compatibility labels remain while producers are migrated toward smaller atomic candidates. Context stores have not been consolidated.
+- Unified Turn Understanding remains a deterministic, bounded integration layer: existing component outputs and compatibility labels remain while producers are migrated toward smaller atomic candidates. Event and temporal interpretation does not invent absolute timestamps or high-confidence causality, and Context stores have not been consolidated.
 
 ## Stable engineering decisions
 
@@ -121,6 +130,7 @@ See [`api.md`](api.md) for request examples and limits.
 6. Safe semantics: understanding candidates can propose interpretation but cannot bypass write safety.
 7. Historical migration safety: legacy RLS enforcement waits for the signed forced-upgrade gate.
 8. One resolved turn bus: existing understanding modules contribute evidence to `TurnUnderstanding`; Dialogue and Initiative consume that resolved result rather than choosing among parallel intent labels.
+9. Semantic state is not Topic status: reality-state transitions are resolved on the unified bus, then only confident controlled summaries are projected into bounded Topic Working Memory; legacy Topic rules remain a fallback during migration.
 
 ## Maintenance protocol
 

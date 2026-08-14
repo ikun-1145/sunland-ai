@@ -37,15 +37,22 @@ interface EventDraft {
 const FAILURE = /(?:(?:bug|问题|故障).{0,4}(?:又|再次)?活了|炸了?|崩了?|挂了?|坏了?|失败|报错|异常|断了?|断开|超时|连不上|打不开|不行|没好|没约到|没抢到)/iu;
 const RESOLUTION = /(?:修好|修完|解决|搞定|恢复|能用了?|好了|成功了)/u;
 const ATTEMPT = /(?:试了|尝试|重试|重启|重装|清缓存|换了|改了|重新配置)/iu;
-const UPDATE = /(?:更新|升级|改(?:了|完)?(?:配置|cookie|依赖|代码|密钥)|换(?:了|完)?(?:配置|方案|版本|密钥))/iu;
+const UPDATE = /(?:更新|升级|改(?:了|完)?(?:配置|cookie|依赖|代码|密钥)|换(?:了|完)?(?:配置|方案|版本|密钥)|(?:配置|cookie|依赖|代码|密钥)(?:更新|升级|改完|改了))/iu;
 const WAITING = /(?:还在(?:等|转圈|加载|处理|重连|报错)|仍在等|问题还在|正在(?:审核|处理|排队)|还没(?:到|发|返图|出图|完成|好)|没收到)/u;
 const UNRESOLVED_PROBLEM = /(?:还没好|还是不行|仍然不行|依然不行|还在(?:转圈|加载|重连|报错)|问题还在)/u;
 const RECEIVE = /(?:收到了?|到手了?|(?:谷|周边|返图|稿子|稿件|快递|毛装).{0,5}到了?|终于(?:到了|收到|返图))/u;
 const SEND = /(?:(?:老师|画师|对方).{0,6}(?:发了|返图了|交付了)|(?:稿子|稿件|返图).{0,5}(?:发了|交付))/u;
+const START = /(?:启动了?|开始了?|开工了?|上线了?|开服了?)/u;
+const STOP = /(?:停止了?|停了|关了|下线了?)/u;
+const RESUME = /(?:恢复运行|重新开始|重新启动|继续运行)/u;
+const COMPLETE = /(?:完成了?|做完了?|弄完了?|结束了?)/u;
+const CREATE = /(?:创建了?|新建了?|生成了?)/u;
+const DELETE = /(?:删除了?|删掉了?|移除了?)/u;
+const CHANGE = /(?:变成了?|变为|改成了?|状态从.{1,12}变成)/u;
 const COMMISSION_OPEN = /(?:老师|画师|太太).{0,8}(?:开稿|开委托|放档期|开槽)|(?:开稿|开委托|放档期|开槽).{0,8}(?:老师|画师|太太)/u;
 const MERCH_RELEASE = /(?:我推|本命|自推).{0,8}(?:出谷|上新|新谷|周边)|(?:出谷|上新|新谷).{0,8}(?:我推|本命|自推)/u;
 const REPEATED_MEAL = /我又(?:去)?吃(?:了)?(?:火锅|饭|烧烤|外卖|面|披萨|汉堡)/u;
-const CORRECTION = /^(?:不对|等等|等下|好像不是|我说错了|其实)[，,s]*/u;
+const CORRECTION = /^(?:不对|等等|等下|好像不是|我说错了|其实)[，,\s]*/u;
 const CHOICE = /(?:选|要|用|买|吃|是).{0,12}还是.{0,12}[？?]|^[^，,。]{1,12}还是[^，,。]{1,12}[？?]$/u;
 
 function confidence(value: number): number {
@@ -79,6 +86,7 @@ function explicitTarget(input: string): EntityRef | undefined {
     [/服务器/u, "服务器", "software"],
     [/数据库/u, "数据库", "software"],
     [/(?:网站|网页)/u, "网站", "project"],
+    [/(?:服务)/u, "服务", "software"],
     [/(?:登录)/u, "登录问题", "problem"],
     [/(?:接口|API)/iu, "接口", "software"],
     [/(?:代码)/u, "代码", "project"],
@@ -86,6 +94,8 @@ function explicitTarget(input: string): EntityRef | undefined {
     [/(?:依赖)/u, "依赖", "object"],
     [/(?:配置)/u, "配置", "object"],
     [/(?:cookie)/iu, "cookie", "object"],
+    [/(?:任务)/u, "任务", "object"],
+    [/(?:缓存)/u, "缓存", "object"],
     [/(?:返图)/u, "返图", "deliverable"],
     [/(?:稿子|稿件)/u, "稿件", "deliverable"],
     [/(?:谷|谷子|周边)/u, "周边", "object"],
@@ -114,13 +124,23 @@ function previousTopic(
   conversation: ConversationUnderstanding,
   input: string,
 ): WorkingConversationTopic | undefined {
-  if (conversation.topicContinuity.activeTopic !== undefined) {
+  const currentTurn = conversation.topicContinuity.workingMemory.currentTurn;
+  const correction = CORRECTION.test(input);
+  if (
+    conversation.topicContinuity.activeTopic !== undefined &&
+    !(correction && conversation.topicContinuity.activeTopic.createdTurn === currentTurn)
+  ) {
     return conversation.topicContinuity.activeTopic;
   }
-  if (!CORRECTION.test(input) && !/(?:还是|仍然|依然|终于|已经|还没|还在)/u.test(input)) {
+  if (
+    conversation.topicContinuity.transition !== "resolved" &&
+    !correction &&
+    !/(?:还是|仍然|依然|终于|已经|还没|还在)/u.test(input)
+  ) {
     return undefined;
   }
   return [...conversation.topicContinuity.workingMemory.topics]
+    .filter((topic) => !correction || topic.createdTurn < currentTurn)
     .sort((left, right) => right.lastMentionTurn - left.lastMentionTurn)[0];
 }
 
@@ -195,6 +215,11 @@ function draftForClause(
   const previous = inheritedState ?? context.previousState;
   const again = /(?:又|再次|重新)/u.test(clause);
   const still = /(?:还是|仍然|依然|还在|问题还在)/u.test(clause);
+  const contextResult = context.topic !== undefined && (
+    previous?.status === "pending" ||
+    previous?.status === "unavailable" ||
+    /(?:返图|委托|周边|快递|稿)/u.test(context.topic.label)
+  );
 
   if (COMMISSION_OPEN.test(clause)) {
     return {
@@ -206,7 +231,7 @@ function draftForClause(
       evidenceLabel: "commission-open",
     };
   }
-  if (MERCH_RELEASE.test(clause)) {
+  if (MERCH_RELEASE.test(clause) && !WAITING.test(clause)) {
     return {
       type: "create",
       target: entityRef("merchandise_release", "event", 0.94),
@@ -228,7 +253,7 @@ function draftForClause(
     };
   }
   if (WAITING.test(clause)) {
-    const problem = target.type === "problem" || context.topic?.entities.some(
+    const problem = target.type === "problem" || FAILURE.test(clause) || context.topic?.entities.some(
       ({ type }) => type === "problem",
     ) === true;
     return problem && UNRESOLVED_PROBLEM.test(clause)
@@ -248,6 +273,16 @@ function draftForClause(
           confidence: context.ambiguous ? 0.58 : 0.91,
           evidenceLabel: "pending-result",
         };
+  }
+  if (RESUME.test(clause)) {
+    return {
+      type: "resume",
+      target,
+      stateBefore: previous ?? state("inactive_or_failed", "inactive", 0.64),
+      stateAfter: state("running", "working", 0.9),
+      confidence: context.ambiguous ? 0.58 : target.confidence >= 0.7 ? 0.9 : 0.74,
+      evidenceLabel: "resumed",
+    };
   }
   if (FAILURE.test(clause)) {
     const newlyReported = context.topic?.createdTurn === context.currentTurn &&
@@ -299,7 +334,23 @@ function draftForClause(
       evidenceLabel: "received",
     };
   }
-  if (SEND.test(clause)) {
+  if (
+    contextResult &&
+    /^(?:已经|终于|总算)?(?:到了|收到了?)[呀啊哦！!。,.，\s]*$/u.test(clause)
+  ) {
+    return {
+      type: "receive",
+      target,
+      stateBefore: previous ?? state("pending", "pending", 0.72),
+      stateAfter: state("received", "available", 0.94),
+      confidence: context.ambiguous ? 0.58 : 0.9,
+      evidenceLabel: "context-received",
+    };
+  }
+  if (
+    SEND.test(clause) ||
+    (contextResult && /^(?:已经|终于|总算)?(?:发了|发出去了|交付了)[呀啊哦！!。,.，\s]*$/u.test(clause))
+  ) {
     return {
       type: "send",
       target,
@@ -307,6 +358,66 @@ function draftForClause(
       stateAfter: state("sent", "available", 0.9),
       confidence: 0.88,
       evidenceLabel: "sent",
+    };
+  }
+  if (STOP.test(clause)) {
+    return {
+      type: "stop",
+      target,
+      stateBefore: previous ?? state("previous_active", "active", 0.62),
+      stateAfter: state("inactive", "inactive", 0.92),
+      confidence: target.confidence >= 0.7 ? 0.9 : 0.72,
+      evidenceLabel: "stopped",
+    };
+  }
+  if (START.test(clause)) {
+    return {
+      type: "start",
+      target,
+      stateBefore: previous ?? state("previous_inactive", "inactive", 0.62),
+      stateAfter: state("active", "active", 0.92),
+      confidence: target.confidence >= 0.7 ? 0.9 : 0.72,
+      evidenceLabel: "started",
+    };
+  }
+  if (COMPLETE.test(clause)) {
+    return {
+      type: "complete",
+      target,
+      ...(previous === undefined ? {} : { stateBefore: previous }),
+      stateAfter: state("completed", "resolved", 0.92),
+      confidence: context.ambiguous ? 0.58 : target.confidence >= 0.7 ? 0.9 : 0.74,
+      evidenceLabel: "completed",
+    };
+  }
+  if (DELETE.test(clause)) {
+    return {
+      type: "delete",
+      target,
+      stateBefore: previous ?? state("available", "available", 0.58),
+      stateAfter: state("deleted", "inactive", 0.9),
+      confidence: target.confidence >= 0.7 ? 0.9 : 0.72,
+      evidenceLabel: "deleted",
+    };
+  }
+  if (CREATE.test(clause)) {
+    return {
+      type: "create",
+      target,
+      stateBefore: previous ?? state("not_created", "unavailable", 0.58),
+      stateAfter: state("created", "available", 0.9),
+      confidence: target.confidence >= 0.7 ? 0.9 : 0.72,
+      evidenceLabel: "created",
+    };
+  }
+  if (CHANGE.test(clause)) {
+    return {
+      type: "change",
+      target,
+      ...(previous === undefined ? {} : { stateBefore: previous }),
+      stateAfter: state("changed", "working", 0.82),
+      confidence: target.confidence >= 0.7 ? 0.88 : 0.72,
+      evidenceLabel: "changed",
     };
   }
   if (UPDATE.test(clause)) {
@@ -329,7 +440,7 @@ function draftForClause(
       evidenceLabel: "retry-attempt",
     };
   }
-  if (/刚才还好好的/u.test(clause)) {
+  if (/刚(?:刚|才)还好好的/u.test(clause)) {
     return {
       type: "success",
       target,
@@ -398,7 +509,7 @@ export function resolveEventStateCandidates(
       ...(draft.stateAfter === undefined ? {} : { stateAfter: draft.stateAfter }),
       recurrence: draft.recurrence === true,
       previousOccurrence: draft.recurrence === true ||
-        /(?:还是|仍然|依然)/u.test(clause),
+        /(?:还是|仍然|依然|还在|问题还在)/u.test(clause),
       certainty: confidence(draft.confidence),
       confidence: confidence(draft.confidence),
       evidence: Object.freeze([{ evidenceId }]),

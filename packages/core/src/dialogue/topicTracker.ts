@@ -46,6 +46,7 @@ const SAFE_ENTITY_ID = /^entity-[a-z0-9-]+$/u;
 const REACTION_ONLY = /^(?:(?:哈){2,}|233+|笑死(?:我了)?|草|嗯+|哦+|行(?:吧)?|好(?:的)?|寄|晚安|[?？]+)[呀啊哦哈！!。,.，\s～~]*$/u;
 const SWITCH_CUE = /(?:^|[，,。！!？?\s])(?:对了|话说|顺便|换个话题|先不说这个|另外(?:想问|说个)|回到刚才)/u;
 const RETURN_CUE = /(?:回到刚才|刚才那个|前面那个|之前那个)/u;
+const CORRECTION_CUE = /^(?:不对|等等|等下|好像不是|我说错了|其实)[，,\s]*/u;
 const PAUSE_CUE = /(?:这个|那个|问题|bug)?.{0,5}(?:等下再说|先放着|先不说|待会再弄|晚点再看)/iu;
 const ABANDON_CUE = /(?:算了不(?:搞|弄|管|聊)|不管了|放弃了|懒得弄|就这样吧)/u;
 const RESOLVED_CUE = /(?:^|[，,。！!\s])(?:好了|解决了|搞定了|修好了|恢复了|能用了|成功了)[呀啊哦！!。,.，\s]*$/u;
@@ -168,7 +169,10 @@ function normalizeEvent(value: unknown): TopicEvent | null {
     : undefined;
   const summary = boundedText(value.summary, 64);
   if (type === undefined || summary === undefined) return null;
-  const semanticEventId = boundedText(value.semanticEventId, 80);
+  const semanticEventId = typeof value.semanticEventId === "string" &&
+      /^event-[a-z0-9-]{1,74}$/u.test(value.semanticEventId)
+    ? value.semanticEventId
+    : undefined;
   return Object.freeze({
     type,
     summary,
@@ -528,7 +532,10 @@ function topicEventFromUnderstanding(event: UnderstoodEvent): TopicEvent | null 
     : event.type === "resolve" || event.type === "recover"
       ? "resolved"
       : event.type === "success" || event.type === "complete" ||
-          event.type === "receive" || event.type === "send"
+          event.type === "receive" || event.type === "send" ||
+          event.type === "start" || event.type === "stop" ||
+          event.type === "resume" || event.type === "create" ||
+          event.type === "delete"
         ? "succeeded"
         : event.type === "retry" || event.type === "update" || event.type === "change"
           ? "attempted"
@@ -553,6 +560,59 @@ function topicEventFromUnderstanding(event: UnderstoodEvent): TopicEvent | null 
   });
 }
 
+function topicEntityFromUnderstanding(event: UnderstoodEvent): TopicEntity | undefined {
+  const target = event.target;
+  if (target === undefined || target.label === "unknown") return undefined;
+  const type: TopicEntityType = target.type === "action"
+    ? "event"
+    : target.type === "deliverable"
+      ? "object"
+      : target.type;
+  return topicEntity(type, target.label, target.label);
+}
+
+function createTopicFromUnderstanding(
+  continuity: TopicContinuity,
+  event: UnderstoodEvent,
+  projected: TopicEvent,
+): TopicContinuity | undefined {
+  if (event.type !== "failure" && event.type !== "wait") return undefined;
+  const entity = topicEntityFromUnderstanding(event);
+  if (entity === undefined || event.target?.confidence === undefined || event.target.confidence < 0.75) {
+    return undefined;
+  }
+  const currentTurn = continuity.workingMemory.currentTurn;
+  const eventType: TopicEventType = event.type === "failure" ? "problem_reported" : "pending";
+  const initialEvent = Object.freeze({
+    ...projected,
+    type: eventType,
+    summary: eventType === "problem_reported"
+      ? "统一理解识别了需要跟踪的问题"
+      : "统一理解识别了等待中的结果",
+  });
+  const label = event.type === "failure" && !/(?:问题|bug)/iu.test(event.target.label)
+    ? `${event.target.label}问题`
+    : event.target.label;
+  const created = Object.freeze({
+    ...newTopic(label, [entity], initialEvent, currentTurn, []),
+    ...(event.stateAfter === undefined ? {} : { semanticState: event.stateAfter }),
+  });
+  const topics = boundedTopics(
+    [...continuity.workingMemory.topics, created],
+    created.id,
+  );
+  return Object.freeze({
+    ...continuity,
+    transition: "new_topic",
+    workingMemory: Object.freeze({
+      ...continuity.workingMemory,
+      activeTopicId: created.id,
+      topics,
+    }),
+    activeTopic: created,
+  });
+}
+
 /**
  * Projects a confident unified event back into bounded Working Memory.
  * The legacy topic regex remains the fallback that created `continuity`.
@@ -570,21 +630,32 @@ export function applyUnifiedEventsToTopicContinuity(
     .at(-1);
   if (semanticEvent === undefined) return continuity;
   const targetId = semanticEvent.target?.id;
+  const targetLabel = semanticEvent.target?.label;
   const active = continuity.activeTopic ?? (
-    targetId === undefined
-      ? undefined
-      : continuity.workingMemory.topics.find((topic) =>
-          topic.id === targetId || topic.entities.some(({ id }) => id === targetId),
+    continuity.workingMemory.topics.find((topic) =>
+      (targetId !== undefined && (
+        topic.id === targetId || topic.entities.some(({ id }) => id === targetId)
+      )) ||
+      (targetLabel !== undefined && targetLabel !== "unknown" && (
+        topic.label === targetLabel ||
+        topic.entities.some(({ aliases, canonicalName }) =>
+          canonicalName === targetLabel || aliases.includes(targetLabel),
         )
+      )),
+    )
   );
-  if (active === undefined) return continuity;
   const projected = topicEventFromUnderstanding(semanticEvent);
   if (projected === null) return continuity;
+  if (active === undefined) {
+    return createTopicFromUnderstanding(continuity, semanticEvent, projected) ?? continuity;
+  }
 
   const currentTurn = continuity.workingMemory.currentTurn;
+  const currentLegacyEvent = active.events.at(-1)?.turn === currentTurn;
   const compatibleProjection = projected.type === "failed" &&
-      active.createdTurn === currentTurn &&
-      active.events.at(-1)?.type === "problem_reported"
+      active.events.at(-1)?.type === "problem_reported" &&
+      currentLegacyEvent &&
+      continuity.transition === "new_topic"
     ? Object.freeze({
         ...projected,
         type: "problem_reported" as const,
@@ -675,6 +746,7 @@ export function trackConversationTopics(
     : previous.topics.find(({ id }) => id === previous.activeTopicId);
   const referencedTopic = topicForReference(previous.topics, references.references);
   const returnRequested = RETURN_CUE.test(input);
+  const correctionRequested = CORRECTION_CUE.test(input);
   const reactionOnly = intent === "reaction" || REACTION_ONLY.test(input);
   const meaningful = input.trim().length > 1 && !reactionOnly && intent !== "greeting" && intent !== "thanks" && intent !== "farewell";
   const hasImplicitContinuation =
@@ -691,7 +763,9 @@ export function trackConversationTopics(
     transition = "ambiguous";
   } else {
     const hasExplicitNamedEntity = entities.some(({ type }) => type !== "problem");
-    let selected = returnRequested
+    let selected = correctionRequested
+      ? [...topics].sort((left, right) => right.lastMentionTurn - left.lastMentionTurn)[0]
+      : returnRequested
       ? referencedTopic
       : hasExplicitNamedEntity
         ? topicForEntities(topics, entities)
@@ -712,6 +786,7 @@ export function trackConversationTopics(
     const explicitDifferentTopic = label !== undefined &&
       (previousActive === undefined || !sameTopic(previousActive, label, entities));
     const createNew = meaningful && label !== undefined && selected === undefined &&
+      !correctionRequested &&
       (explicitDifferentTopic || SWITCH_CUE.test(input));
 
     if (createNew) {

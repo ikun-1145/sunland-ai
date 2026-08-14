@@ -34,7 +34,16 @@ export function renderFrostTopicDialogue(turn: DialogueTurnContext): string | nu
   if (continuity.transition === "paused") return "行，这个先放着，等你想继续了再接上。";
   if (continuity.transition === "abandoned") return "行，那这条先收住，不跟它继续耗了。";
   if (continuity.transition === "resolved" || event?.type === "resolved") {
+    if (topic?.createdTurn === turn.state.workingMemory.currentTurn && topic.events.length === 1) {
+      return null;
+    }
     return "终于好了。这口气总算顺下来了。";
+  }
+  if (
+    continuity.references.some(({ confidence }) => confidence >= 0.7) &&
+    /(?:重新连接|重连)/u.test(turn.raw)
+  ) {
+    return "那就还是卡在重新连接这一步。这个现象可以接着往下排。";
   }
   if (event?.type === "failed") {
     return turn.understanding.conversationMode === "technical"
@@ -46,12 +55,6 @@ export function renderFrostTopicDialogue(turn: DialogueTurnContext): string | nu
   }
   if (continuity.transition === "resumed" && topic !== undefined) {
     return `对，刚才那个${topic.label}。后来咋样了？`;
-  }
-  if (
-    continuity.references.some(({ confidence }) => confidence >= 0.7) &&
-    /(?:重新连接|重连)/u.test(turn.raw)
-  ) {
-    return "那就还是卡在重新连接这一步。这个现象可以接着往下排。";
   }
   return null;
 }
@@ -67,16 +70,19 @@ export function renderPlainTopicDialogue(turn: DialogueTurnContext): string | nu
   if (continuity.transition === "paused") return "这个话题先暂停。";
   if (continuity.transition === "abandoned") return "这个话题先结束。";
   if (continuity.transition === "resolved" || event?.type === "resolved") {
+    if (topic?.createdTurn === turn.state.workingMemory.currentTurn && topic.events.length === 1) {
+      return null;
+    }
     return "问题已经解决。";
-  }
-  if (event?.type === "failed") return "此前的处理没有解决问题，请继续提供结果。";
-  if (event?.type === "succeeded") return "等待的结果已经出现。";
-  if (continuity.transition === "resumed" && topic !== undefined) {
-    return `继续刚才的${topic.label}。请说后续情况。`;
   }
   if (
     continuity.references.some(({ confidence }) => confidence >= 0.7) &&
     /(?:重新连接|重连)/u.test(turn.raw)
   ) return "当前问题仍停留在重新连接这一步。";
+  if (event?.type === "failed") return "此前的处理没有解决问题，请继续提供结果。";
+  if (event?.type === "succeeded") return "等待的结果已经出现。";
+  if (continuity.transition === "resumed" && topic !== undefined) {
+    return `继续刚才的${topic.label}。请说后续情况。`;
+  }
   return null;
 }
