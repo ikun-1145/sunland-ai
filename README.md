@@ -142,4 +142,4 @@ The numbered migrations directly under `supabase/migrations` are the normal prep
 
 Sunland AI is at version `0.1.0` and is not published as a public npm package. The Playground is development scaffolding, while the Worker/Core path is the production architecture.
 
-Licensed under the [MIT License](LICENSE).
+Licensed under the [GNU Affero General Public License v3.0 only](LICENSE) (AGPL-3.0-only).

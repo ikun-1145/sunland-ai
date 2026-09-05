@@ -142,4 +142,4 @@ Worker 密钥不会进入仓库。已部署环境使用 Wrangler secrets，本�
 
 Sunland AI 当前版本为 `0.1.0`，没有作为公开 npm 包发布。Playground 仍是开发脚手架；Worker/Core 链路是当前生产架构。
 
-项目采用 [MIT License](LICENSE)。
+项目采用 [GNU Affero General Public License v3.0 only](LICENSE)，即 AGPL-3.0-only。
