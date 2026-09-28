@@ -1,3 +1,9 @@
+import { CoreRelations } from "@/types";
+import {
+  ADDITIONAL_RELATIONS,
+  relationAliasesFor,
+} from "@/parser/relationVocabulary";
+import { normalizeSemanticMatchText } from "./normalize";
 import { createConfidence, type Confidence } from "./types";
 
 export type SemanticLexiconCategory =
@@ -17,10 +23,30 @@ export interface SemanticLexiconConstraints {
   readonly requiresFollowingEntity?: boolean;
 }
 
+/** One lexicon alias in match form, remembering the surface form it came from. */
+export interface LexiconNormalizedAlias {
+  /** The alias exactly as declared; used for evidence and reporting. */
+  readonly surface: string;
+  /** The alias in match form; used for searching `input.matchKey`. */
+  readonly match: string;
+}
+
 export interface SemanticLexiconEntry {
   readonly id: string;
   readonly canonical: string;
   readonly aliases: readonly string[];
+  /**
+   * `aliases` in match form (trimmed, whitespace-collapsed, case-folded),
+   * sorted LONGEST FIRST and paired with the surface alias.
+   *
+   * Precomputed once at module load. `findLexiconOccurrences` used to re-sort
+   * and re-normalize every entry's aliases on every turn, which is pure waste
+   * because both the alias list and the normalization are constants. Longest
+   * first is also load-bearing: aliases are searched as substrings of the match
+   * key, so a shorter alias must never be claimed ahead of a longer one
+   * starting at the same position.
+   */
+  readonly normalizedAliases: readonly LexiconNormalizedAlias[];
   readonly category: SemanticLexiconCategory;
   readonly baseWeight: Confidence;
   readonly constraints: SemanticLexiconConstraints;
@@ -41,10 +67,32 @@ interface LexiconDefinition {
   readonly sideEffectSafe: boolean;
 }
 
+function normalizeAliases(
+  aliases: readonly string[],
+): readonly LexiconNormalizedAlias[] {
+  return Object.freeze(
+    aliases
+      .map((surface) =>
+        Object.freeze({
+          surface,
+          match: normalizeSemanticMatchText(surface),
+        }),
+      )
+      .sort(
+        (left, right) =>
+          right.match.length - left.match.length ||
+          left.match.localeCompare(right.match) ||
+          left.surface.localeCompare(right.surface),
+      ),
+  );
+}
+
 function freezeEntry(definition: LexiconDefinition): SemanticLexiconEntry {
+  const aliases = Object.freeze([...definition.aliases]);
   return Object.freeze({
     ...definition,
-    aliases: Object.freeze([...definition.aliases]),
+    aliases,
+    normalizedAliases: normalizeAliases(aliases),
     baseWeight: createConfidence(definition.baseWeight),
     constraints: Object.freeze({
       ...definition.constraints,
@@ -182,7 +230,7 @@ export const SEMANTIC_LEXICON: readonly SemanticLexiconEntry[] = Object.freeze(
     {
       id: "is-a",
       canonical: "属于",
-      aliases: ["属于", "是一种", "算是", "归类为", "是"],
+      aliases: [...relationAliasesFor(CoreRelations.IsA), "是"],
       category: "relation",
       baseWeight: 0.86,
       constraints: {
@@ -194,7 +242,7 @@ export const SEMANTIC_LEXICON: readonly SemanticLexiconEntry[] = Object.freeze(
     {
       id: "can",
       canonical: "会",
-      aliases: ["会", "能", "能够", "可以"],
+      aliases: relationAliasesFor(CoreRelations.Can),
       category: "relation",
       baseWeight: 0.78,
       constraints: {
@@ -206,7 +254,7 @@ export const SEMANTIC_LEXICON: readonly SemanticLexiconEntry[] = Object.freeze(
     {
       id: "has",
       canonical: "有",
-      aliases: ["有", "拥有", "具备"],
+      aliases: relationAliasesFor(ADDITIONAL_RELATIONS.Has),
       category: "relation",
       baseWeight: 0.8,
       constraints: {
@@ -218,7 +266,7 @@ export const SEMANTIC_LEXICON: readonly SemanticLexiconEntry[] = Object.freeze(
     {
       id: "likes",
       canonical: "喜欢",
-      aliases: ["喜欢", "喜爱"],
+      aliases: relationAliasesFor(CoreRelations.Likes),
       category: "relation",
       baseWeight: 0.82,
       constraints: {
@@ -230,7 +278,7 @@ export const SEMANTIC_LEXICON: readonly SemanticLexiconEntry[] = Object.freeze(
     {
       id: "located-in",
       canonical: "在",
-      aliases: ["位于", "在"],
+      aliases: relationAliasesFor(CoreRelations.LocatedIn),
       category: "relation",
       baseWeight: 0.8,
       constraints: {
@@ -242,7 +290,7 @@ export const SEMANTIC_LEXICON: readonly SemanticLexiconEntry[] = Object.freeze(
     {
       id: "means",
       canonical: "意思是",
-      aliases: ["意思是", "是什么意思", "表示", "指的是"],
+      aliases: [...relationAliasesFor(ADDITIONAL_RELATIONS.Means), "是什么意思", "表示"],
       category: "relation",
       baseWeight: 0.84,
       constraints: {

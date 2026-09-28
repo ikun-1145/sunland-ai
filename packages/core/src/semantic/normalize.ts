@@ -4,6 +4,32 @@ import type {
   RawTextRange,
 } from "./types";
 
+/**
+ * The comparison form used by the Semantic layer for matcher keys, alias
+ * lookups and dedupe keys: trim, collapse whitespace runs, case-fold.
+ *
+ * This is the single implementation. It used to be copy-pasted in
+ * `semantic/candidates.ts`, `semantic/engineAdapter.ts`,
+ * `semantic/legacySideEffectGate.ts` and
+ * `semantic/producers/contextProducer.ts`; four copies of a comparison key is
+ * four chances for a write to be approved under one form and stored under
+ * another.
+ *
+ * It is IDEMPOTENT, which callers depend on because parse-side and write-side
+ * code both apply it and the result must not drift with the number of
+ * applications. It does NOT delete whitespace — see `parser/textNormalize.ts`'s
+ * `entityLookupKey` for the whitespace-insensitive LOOKUP key, which is a
+ * separate, comparison-only concern.
+ */
+const MATCH_TEXT_WHITESPACE = /\s+/gu;
+
+export function normalizeSemanticMatchText(value: string): string {
+  return value
+    .trim()
+    .replace(MATCH_TEXT_WHITESPACE, " ")
+    .toLocaleLowerCase("und");
+}
+
 type NormalizedView = "surface" | "matchKey";
 
 interface TextUnit {

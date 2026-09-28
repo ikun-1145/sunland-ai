@@ -22,6 +22,23 @@ describe("createRememberNameIntentMatcher", () => {
     expect(matcher.match("我叫什么")).toBeNull();
   });
 
+  it.each([
+    ["记住 我叫小明", "小明"],
+    ["教你 我叫小明", "小明"],
+    ["记住这个事实 我叫小明", "小明"],
+  ])("ignores a leading teaching cue in '%s' and keeps the name '%s'", (input, name) => {
+    // The cue is a wrapper, not part of the name. Without stripping, the name
+    // patterns never match and the name is silently never learned.
+    const result = matcher.match(input);
+    expect(result).not.toBeNull();
+    expect(result?.entities).toEqual([name]);
+  });
+
+  it("still refuses a name when the cue removal would invent one", () => {
+    // "记住这个事实很重要" is a sentence about the cue, not a name.
+    expect(matcher.match("记住这个事实很重要")).toBeNull();
+  });
+
   it("does not recognize an unrelated sentence", () => {
     expect(matcher.match("猫属于哺乳动物")).toBeNull();
   });

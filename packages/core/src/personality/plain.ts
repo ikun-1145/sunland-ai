@@ -106,8 +106,53 @@ export const PlainPersonality: PersonalityProfile = {
         }
         return "这句话有多种可能的意思，请换一种更具体的说法。";
       case "learned": {
-        const negation = context.record.negated ? "不" : "";
-        return `已记录：${context.record.subject} ${negation}${context.record.relation} ${context.record.object}`;
+        const factOf = (entry: {
+          readonly subject: string;
+          readonly relation: string;
+          readonly object: string;
+          readonly negated: boolean;
+        }): string => {
+          const negation = entry.negated ? "不" : "";
+          return `${entry.subject} ${negation}${entry.relation} ${entry.object}`;
+        };
+        const fact = factOf(context.record);
+        const outcome = context.outcome ?? "added";
+        // Plain states only what the store actually holds afterwards.
+        //   - "已记录" is wrong for a fact that was already there;
+        //   - "已更新" would be wrong for a related fact, because the earlier
+        //     facts are still stored: the new one is an addition beside them,
+        //     so the reply says that and shows what else is kept.
+        if (outcome === "already-known") return `已知，未重复记录：${fact}`;
+        if (outcome === "related-known") {
+          const existing = (context.relatedExisting ?? []).map(factOf).join("；");
+          return existing.length === 0
+            ? `已追加：${fact}`
+            : `已记录新的相关事实：${fact}（已有记录仍保留：${existing}）`;
+        }
+        return `已记录：${fact}`;
+      }
+      case "learned-many": {
+        // One line per fact, each stating only what happened to THAT fact. The
+        // wording rules are the same as the single-fact case.
+        const lines = context.results.map((entry) => {
+          const record = entry.record;
+          const negation = record.negated ? "不" : "";
+          const fact = `${record.subject} ${negation}${record.relation} ${record.object}`;
+          if (entry.outcome === "already-known") return `已知，未重复记录：${fact}`;
+          if (entry.outcome === "related-known") {
+            const existing = (entry.relatedExisting ?? [])
+              .map((other) => {
+                const otherNegation = other.negated ? "不" : "";
+                return `${other.subject} ${otherNegation}${other.relation} ${other.object}`;
+              })
+              .join("；");
+            return existing.length === 0
+              ? `已追加：${fact}`
+              : `已记录新的相关事实：${fact}（已有记录仍保留：${existing}）`;
+          }
+          return `已记录：${fact}`;
+        });
+        return lines.join("\n");
       }
       case "unknown-input":
         return context.failure.raw.trim()

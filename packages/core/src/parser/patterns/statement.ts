@@ -13,6 +13,10 @@
 import type { GrammarPattern, Relation } from "@/types";
 import { escapeRegExp } from "@/utils";
 import {
+  canonicalStatementTriple,
+  stripTeachingCuePrefix,
+} from "../teachingCanonical";
+import {
   hasUnsafeLegacySideEffectStructure,
   normalizeCapturedValue,
 } from "../sideEffectSafety";
@@ -41,11 +45,15 @@ export function createStatementPattern(
   return {
     name: `statement:${relation}`,
     match(normalizedInput, rawInput) {
-      const input = rawInput ?? normalizedInput;
-      if (hasUnsafeLegacySideEffectStructure(input)) {
+      // Safety is judged on exactly what the user typed, before any wrapper is
+      // removed: stripping a cue must never be able to turn an input that the
+      // gate would reject into one it accepts.
+      const raw = rawInput ?? normalizedInput;
+      if (hasUnsafeLegacySideEffectStructure(raw)) {
         return null;
       }
 
+      const input = stripTeachingCuePrefix(raw);
       const matched = pattern.exec(input);
       if (!matched) return null;
 
@@ -55,13 +63,29 @@ export function createStatementPattern(
       const cleanObject = normalizeCapturedValue(object);
       if (!cleanSubject || !cleanObject) return null;
 
+      const [canonicalSubject, canonicalRelation, canonicalObject] =
+        canonicalStatementTriple(
+          cleanSubject,
+          relation,
+          cleanObject,
+          negationMarker === "不" || negationMarker === "没",
+          // The relation vocabulary this pattern itself was registered with is
+          // the only is-a evidence available at the Legacy layer: `是一种` is
+          // an alias of the is-a relation, so matching it always means
+          // classification, and so does a bare `是` whose object carries the
+          // `一种...` wrapper. A plain `是` with an unrelated object stays
+          // identity (苏格拉底 是 人). Semantic promotion is decided in
+          // `canonicalStatementTriple` via the write gate.
+          relation === "是一种" || cleanObject.startsWith("一种"),
+        );
+
       return {
         type: "statement",
-        subject: cleanSubject,
-        relation,
-        object: cleanObject,
+        subject: canonicalSubject,
+        relation: canonicalRelation,
+        object: canonicalObject,
         negated: negationMarker === "不" || negationMarker === "没",
-        raw: input,
+        raw,
       };
     },
   };

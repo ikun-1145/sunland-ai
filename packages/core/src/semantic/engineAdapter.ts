@@ -20,6 +20,7 @@ import {
   isSemanticContextPronoun,
   isSemanticSelfReference,
 } from "./context";
+import { normalizeSemanticMatchText } from "./normalize";
 import {
   evaluateLegacySideEffectFallback,
   type LegacySideEffectAdmission,
@@ -96,9 +97,6 @@ const KNOWN_SLOTS: ReadonlySet<ClarificationSlot> = new Set([
   "intent",
 ]);
 
-function normalized(value: string): string {
-  return value.trim().replace(/\s+/gu, " ").toLocaleLowerCase("und");
-}
 
 function effectiveSideEffect(candidate: SemanticCandidate): boolean {
   return (
@@ -132,7 +130,7 @@ function parseResultsEquivalent(
         left.entities.length === right.entities.length &&
         left.entities.every(
           (entity, index) =>
-            normalized(entity) === normalized(right.entities[index] ?? ""),
+            normalizeSemanticMatchText(entity) === normalizeSemanticMatchText(right.entities[index] ?? ""),
         )
       );
     }
@@ -140,17 +138,17 @@ function parseResultsEquivalent(
       return (
         right.type === "query" &&
         left.kind === right.kind &&
-        normalized(left.subject) === normalized(right.subject) &&
-        normalized(left.relation) === normalized(right.relation) &&
-        normalized(left.object ?? "") === normalized(right.object ?? "") &&
+        normalizeSemanticMatchText(left.subject) === normalizeSemanticMatchText(right.subject) &&
+        normalizeSemanticMatchText(left.relation) === normalizeSemanticMatchText(right.relation) &&
+        normalizeSemanticMatchText(left.object ?? "") === normalizeSemanticMatchText(right.object ?? "") &&
         left.explain === right.explain
       );
     case "statement":
       return (
         right.type === "statement" &&
-        normalized(left.subject) === normalized(right.subject) &&
-        normalized(left.relation) === normalized(right.relation) &&
-        normalized(left.object) === normalized(right.object) &&
+        normalizeSemanticMatchText(left.subject) === normalizeSemanticMatchText(right.subject) &&
+        normalizeSemanticMatchText(left.relation) === normalizeSemanticMatchText(right.relation) &&
+        normalizeSemanticMatchText(left.object) === normalizeSemanticMatchText(right.object) &&
         left.negated === right.negated
       );
     case "unknown":
@@ -163,10 +161,10 @@ function queryRelationsEquivalent(
   left: Relation,
   right: Relation,
 ): boolean {
-  if (normalized(left) === normalized(right)) return true;
+  if (normalizeSemanticMatchText(left) === normalizeSemanticMatchText(right)) return true;
   return (
     candidate.concepts.some(({ id }) => id === "is-a") &&
-    new Set([normalized(left), normalized(right)]).size === 2 &&
+    new Set([normalizeSemanticMatchText(left), normalizeSemanticMatchText(right)]).size === 2 &&
     [left, right].every(
       (relation) => relation === "是" || relation === "属于",
     )
@@ -210,9 +208,9 @@ function isReadOnlyQueryRepair(
       result.relation,
       legacyResult.relation,
     ) &&
-    normalized(result.object ?? "") ===
-      normalized(legacyResult.object ?? "") &&
-    (normalized(result.subject) === normalized(legacyResult.subject) ||
+    normalizeSemanticMatchText(result.object ?? "") ===
+      normalizeSemanticMatchText(legacyResult.object ?? "") &&
+    (normalizeSemanticMatchText(result.subject) === normalizeSemanticMatchText(legacyResult.subject) ||
       candidate.evidence.some(
         ({ kind, key }) =>
           kind === "structural" && key === "query:subject-framing",
@@ -248,10 +246,10 @@ function isContextResolutionOfLegacy(
     return false;
   }
   return (
-    normalized(result.relation) === normalized(legacyResult.relation) &&
+    normalizeSemanticMatchText(result.relation) === normalizeSemanticMatchText(legacyResult.relation) &&
     result.kind === legacyResult.kind &&
-    normalized(result.object ?? "") ===
-      normalized(legacyResult.object ?? "")
+    normalizeSemanticMatchText(result.object ?? "") ===
+      normalizeSemanticMatchText(legacyResult.object ?? "")
   );
 }
 

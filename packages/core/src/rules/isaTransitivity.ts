@@ -29,6 +29,8 @@
  */
 import type { Inference, InferenceRule, KnowledgeQuery, KnowledgeRecord, ReasoningStep, Triple } from "@/types";
 import { CoreRelations } from "@/types";
+import { matchByEntity } from "@/knowledge/entityLookup";
+import { entityLookupKey } from "@/parser/textNormalize";
 
 const RULE_ID = "isa-transitivity";
 
@@ -125,46 +127,87 @@ export function traverseIsAForQuery(
   known: KnowledgeQuery,
   query: IsAQueryTraversal,
 ): readonly Inference[] {
-  const visited = new Set<string>([query.subject]);
-  const queue: QueryPathState[] = [
-    { node: query.subject, records: [] },
-  ];
-  const inferences: Inference[] = [];
-  let queueIndex = 0;
-
-  while (queueIndex < queue.length) {
-    const current = queue[queueIndex]!;
-    queueIndex += 1;
-    const outgoing = known.match({
-      subject: current.node,
-      relation: CoreRelations.IsA,
-      negated: false,
-    });
-
-    for (const edge of outgoing) {
-      if (visited.has(edge.object)) continue;
-      visited.add(edge.object);
-      const records = [...current.records, edge];
-
-      if (query.targetObject === edge.object) {
-        return records.length >= 2
-          ? [buildInference(records)]
-          : [];
-      }
-
-      queue.push({
-        node: edge.object,
-        records,
+  // `visited` uses the whitespace-insensitive ENTITY identity, not the literal
+  // string, and neighbour lookup uses `matchByEntity` (exact first, then the
+  // lookup key). Both are the same identity the store uses for direct answers.
+  //
+  // Before this, the first hop matched through the lookup key but every later
+  // hop used a literal `match`, so a chain broke as soon as an entity's stored
+  // spelling differed from the query's spacing:
+  //   Alice Chen 属于 Furry Club ; Furry Club 属于 Community
+  //   "AliceChen 属于什么" -> only ["Furry Club"], the second hop was lost.
+  //
+  // One entry per reachable ancestor, keeping the SHORTEST chain and breaking
+  // equal-length ties on the chain's canonical text. Standard BFS "first arrival
+  // wins" was insertion-order dependent, so in a diamond
+  // (A->B->D, A->C->D) the reported derivation path -- and therefore the
+  // explanation the user reads -- changed when the same facts were restored in a
+  // different order.
+  const best = new Map<string, QueryPathState>();
+  let queue: QueryPathState[] = [{ node: query.subject, records: [] }];
+  const chainKey = (state: QueryPathState): string =>
+    state.records.map((record) => `${record.subject}\u0000${record.object}`).join("\u0001");
+  // No artificial depth ceiling: the established contract for is-a is the
+  // full transitive closure (verified against a 100-edge chain), and answer
+  // volume is inherently bounded by the reachable subgraph, which
+  // `entityLookupKey` visitation keeps acyclic. Capability propagation is
+  // where a hard budget belongs, because there the branching factor is
+  // facts-per-ancestor rather than graph shape.
+  while (queue.length > 0) {
+    const next: QueryPathState[] = [];
+    // Stop expanding once the asked-for target has been REACHED at this depth.
+    // A query looking for one object must not walk a 100-link chain to the end,
+    // and the answer is already determined: the best path to the target was
+    // recorded while this level was queued. Earlier levels are unaffected, and
+    // levels are processed in order, so the chosen path is still the shortest.
+    if (query.targetObject !== undefined) {
+      const wanted = entityLookupKey(query.targetObject);
+      if (best.has(wanted)) break;
+    }
+    for (const current of queue) {
+      const outgoing = matchByEntity(known, {
+        subject: current.node,
+        relation: CoreRelations.IsA,
+        negated: false,
       });
-
-      // A single direct edge is already returned by direct lookup.
-      if (query.targetObject === undefined && records.length >= 2) {
-        inferences.push(buildInference(records));
+      for (const edge of outgoing) {
+        const objectKey = entityLookupKey(edge.object);
+        if (objectKey === entityLookupKey(query.subject)) continue; // cycle back to the start
+        const records = [...current.records, edge];
+        const existing = best.get(objectKey);
+        if (
+          existing !== undefined &&
+          (existing.records.length < records.length ||
+            (existing.records.length === records.length &&
+              chainKey(existing) <= chainKey({ node: edge.object, records })))
+        ) {
+          continue;
+        }
+        const path: QueryPathState = { node: edge.object, records };
+        best.set(objectKey, path);
+        next.push(path);
       }
     }
+    queue = next;
   }
 
-  return inferences;
+  const ordered = [...best.values()].sort(
+    (left, right) =>
+      left.records.length - right.records.length ||
+      chainKey(left).localeCompare(chainKey(right), "und"),
+  );
+
+  if (query.targetObject !== undefined) {
+    const wanted = entityLookupKey(query.targetObject);
+    const match = ordered.find((state) => entityLookupKey(state.node) === wanted);
+    if (match === undefined || match.records.length < 2) return [];
+    return [buildInference(match.records)];
+  }
+
+  // A single direct edge is already returned by direct lookup.
+  return ordered
+    .filter((state) => state.records.length >= 2)
+    .map((state) => buildInference(state.records));
 }
 
 export const isaTransitivityRule: InferenceRule = {

@@ -61,6 +61,54 @@ export const LEARNED_CLOSERS: readonly string[] = [
   "之后再问到它，我会把这条信息作为已知内容。",
 ];
 
+/**
+ * Said when the fact was ALREADY in the knowledge base. Deliberately does not
+ * reuse `LEARNED_OPENERS`: telling a user "记下了" for something that was
+ * already known is a false claim about what the system just did.
+ */
+export const LEARNED_KNOWN_OPENERS: readonly string[] = [
+  "这条我早就知道啦，没有再记一遍：",
+  "这个已经在我这儿了，我确认了一下：",
+  "嗯，这条已经在你的知识库里了：",
+];
+
+export const LEARNED_KNOWN_CLOSERS: readonly string[] = [
+  "如果你其实想改的是别的内容，直接告诉我新的说法就行。",
+  "要是这条有变化，你告诉我新的，我会当成更新来处理。",
+  "需要更正的话，直接说新的内容就好。",
+];
+
+/**
+ * Said when the new fact sits ALONGSIDE related facts that are still stored.
+ *
+ * Every entry must mention the knowledge base: the user-facing contract for this
+ * reply is that it states where the new fact went, and the opener is selected by
+ * seed, so a single entry without that word would make the promise intermittent
+ * rather than reliable.
+ *
+ * These deliberately never say "更新"/"覆盖"/"替换": the earlier facts are NOT
+ * superseded, so such wording would describe a state the store does not have.
+ */
+export const LEARNED_RELATED_OPENERS: readonly string[] = [
+  "好，这条也记进你的知识库了：",
+  "明白，知识库里又加了一条：",
+  "收到，我把这条也放进你的知识库了：",
+];
+
+/** Introduces the list of related facts that are still kept. */
+export const LEARNED_RELATED_NOTE = "之前记的仍然保留：";
+
+/**
+ * Multi-fact reply (B.8). Terse on purpose: one header, then one line per fact,
+ * so four facts stay readable and each line can be checked against the store.
+ */
+export const LEARNED_MANY_OPENER = "好，这几点我都记下了：";
+
+/** Per-fact prefixes for the multi-fact list. */
+export const LEARNED_PREFIX = "已记录：";
+export const LEARNED_KNOWN_PREFIX = "已知，未重复记录：";
+export const LEARNED_RELATED_PREFIX = "已记录新的相关事实：";
+
 export const UNKNOWN_INPUT_OPENERS: readonly string[] = [
   "这句话我还没完全接住呢。",
   "这个问题，我现在还缺少一点上下文。",

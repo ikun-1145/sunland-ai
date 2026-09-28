@@ -1,6 +1,6 @@
 import type { CommunityResolution, ParseResult } from "@/types";
 import { extractSemanticFeatures } from "./extract";
-import { normalizeSemanticInput } from "./normalize";
+import { normalizeSemanticInput, normalizeSemanticMatchText } from "./normalize";
 import { normalizeSemanticContext } from "./context";
 import { produceContextCandidates } from "./producers/contextProducer";
 import { produceLegacyRegexCandidate } from "./producers/legacyRegexProducer";
@@ -233,9 +233,6 @@ function createDiagnostics(
   return Object.freeze(diagnostics);
 }
 
-function normalizedValue(value: string): string {
-  return value.trim().replace(/\s+/gu, " ").toLocaleLowerCase("und");
-}
 
 function canonicalQueryRelation(
   extraction: SemanticAnalysis["extraction"],
@@ -246,7 +243,7 @@ function canonicalQueryRelation(
   );
   return hasIsAConcept && (relation === "是" || relation === "属于")
     ? "属于"
-    : normalizedValue(relation);
+    : normalizeSemanticMatchText(relation);
 }
 
 function supersededFramedLegacyCandidateIds(
@@ -288,8 +285,8 @@ function supersededFramedLegacyCandidateIds(
                 extraction,
                 legacyResult.relation,
               ) &&
-            normalizedValue(repair.result.object ?? "") ===
-              normalizedValue(legacyResult.object ?? "")
+            normalizeSemanticMatchText(repair.result.object ?? "") ===
+              normalizeSemanticMatchText(legacyResult.object ?? "")
           );
         });
       })

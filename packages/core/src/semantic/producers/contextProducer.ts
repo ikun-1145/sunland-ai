@@ -3,7 +3,7 @@ import {
   isSemanticContextPronoun,
   isSemanticSelfReference,
 } from "../context";
-import { mapNormalizedRangeToRaw } from "../normalize";
+import { mapNormalizedRangeToRaw, normalizeSemanticMatchText } from "../normalize";
 import { SEMANTIC_SCORING } from "../scoring";
 import {
   createConfidence,
@@ -35,9 +35,6 @@ interface EllipsisSubject {
   readonly ambiguousEntities: readonly SemanticContextEntityReference[];
 }
 
-function normalized(value: string): string {
-  return value.trim().replace(/\s+/gu, " ").toLocaleLowerCase("und");
-}
 
 function latestRelevantTurn(
   context: SemanticContext,
@@ -69,7 +66,7 @@ function contextFocus(context: SemanticContext): ContextFocus {
     turn.entityReferences
       .filter(({ kind }) => kind === "subject" || kind === "self")
       .filter((entity) => {
-        const key = normalized(entity.value);
+        const key = normalizeSemanticMatchText(entity.value);
         if (seen.has(key)) return false;
         seen.add(key);
         return true;
@@ -195,7 +192,7 @@ function queryWithResolvedSubject(
   resolvedSubject: string,
   subjectSource: "explicit" | "context",
 ): SemanticCandidate {
-  const rawRange = subjectRawRange(extraction, normalized(query.subject));
+  const rawRange = subjectRawRange(extraction, normalizeSemanticMatchText(query.subject));
   const rawText = extraction.input.raw.slice(rawRange.start, rawRange.end);
   const subject = contextEntity(
     isSelfReference(resolvedSubject) ? "self" : "subject",
@@ -236,7 +233,7 @@ function unresolvedPronounCandidate(
   query: ParsedQuery,
   focus: ContextFocus,
 ): SemanticCandidate {
-  const rawRange = subjectRawRange(extraction, normalized(query.subject));
+  const rawRange = subjectRawRange(extraction, normalizeSemanticMatchText(query.subject));
   const evidence = Object.freeze([
     ...base.evidence,
     feature(
@@ -300,7 +297,7 @@ function contextualizeExplicitRelations(
     ) {
       const rawRange = subjectRawRange(
         extraction,
-        normalized(result.subject),
+        normalizeSemanticMatchText(result.subject),
       );
       const contextEvidence = feature(
         "context:side-effect-subject-prohibited",

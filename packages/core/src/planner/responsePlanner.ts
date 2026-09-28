@@ -78,7 +78,7 @@ export const defaultResponsePlanner: ResponsePlanner = {
   id: "default-v1",
 
   plan(result: ReasoningResult): ResponsePlan {
-    const { answers, query } = result;
+    const { answers, query, conflicts } = result;
 
     if (answers.length === 0) {
       return {
@@ -92,13 +92,23 @@ export const defaultResponsePlanner: ResponsePlanner = {
 
     const wantsExplanation = query.explain === true;
     const confidence = representativeConfidence(answers);
+    const facts = (
+      wantsExplanation ? answers.map(describeWithEvidence) : answers.map(describeBare)
+    ).join("；");
+
+    // A suppression is ALWAYS disclosed, even in direct mode. Answering as if
+    // the contradictory fact did not exist would hide the disagreement from the
+    // user, and the disclosure has to name which fact was held back and on what
+    // basis. Personality embeds this text verbatim, so it rides along without
+    // personality needing to read `result.conflicts` itself.
+    const suppressionNotes = conflicts.map((conflict) => conflict.description);
 
     return {
       mode: wantsExplanation ? "explained" : "direct",
       showEvidence: wantsExplanation,
       isUncertain: confidence < UNCERTAINTY_THRESHOLD,
       confidence,
-      explanation: (wantsExplanation ? answers.map(describeWithEvidence) : answers.map(describeBare)).join("；"),
+      explanation: [facts, ...suppressionNotes].join("；"),
     };
   },
 

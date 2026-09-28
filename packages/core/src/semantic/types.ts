@@ -299,6 +299,15 @@ export interface MissingSlotPolicy {
 
 export interface NegationPolicy {
   readonly preserveNegatedCandidate: boolean;
+  /**
+   * Reject an INCOMPLETE negated side effect.
+   *
+   * The name is historical. This no longer rejects every negated write: a
+   * complete negated statement is a legitimate fact and must be storable, or
+   * `KnowledgeRecord.negated` could never be true. What it still blocks is a
+   * negation attached to a partial reading, where "not" leaves the intended
+   * write ambiguous and therefore unsafe.
+   */
   readonly rejectNegatedSideEffects: boolean;
 }
 

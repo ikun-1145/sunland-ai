@@ -30,8 +30,11 @@ import type {
   CommunityResolution,
   DialogueTurnContext,
   IdentityAspect,
+  KnowledgeRecord,
   KnowledgeStore,
+  LearnedFactResult,
   MemoryManager,
+  MemoryRecord,
   ParseResult,
   ParsedIntent,
   Parser,
@@ -39,6 +42,7 @@ import type {
   Relation,
   ResponseContext,
   StorageAdapter,
+  Triple,
   TurnUnderstanding,
 } from "@/types";
 import { CoreRelations, MemoryKeys } from "@/types";
@@ -110,7 +114,9 @@ import {
   dialogueIntentFromTurn,
   resolveTurnUnderstanding,
 } from "@/understanding";
+import { stripTeachingCuePrefix } from "@/parser/teachingCanonical";
 import { applyUnifiedEventsToTopicContinuity } from "@/dialogue/topicTracker";
+import { splitTeachingInput } from "@/parser/multiFact";
 
 export type {
   SemanticContextMode,
@@ -219,6 +225,12 @@ export interface SunlandProcessResult {
   /** Transient resolved interpretation for evaluation and host diagnostics. */
   readonly understanding: TurnUnderstanding;
   readonly observationSummary?: ObservationSummary;
+  /**
+   * Facts this turn actually added to the knowledge store, in order. Present
+   * only for multi-fact teaching turns, where the host needs to report each
+   * fact separately; a single-fact turn renders its own reply as before.
+   */
+  readonly learnedFacts?: readonly LearnedFactResult[];
 }
 
 export interface SunlandEngine {
@@ -613,7 +625,41 @@ export function createSunlandEngine(options: SunlandEngineOptions = {}): Sunland
     seedKnowledgeStore(store);
   }
 
+  /**
+   * Set while a multi-fact turn is still collecting its facts. Each segment
+   * writes to the in-memory store immediately, but only the LAST one persists,
+   * so a multi-fact turn costs one snapshot write instead of one per fact --
+   * and a failure partway through leaves nothing durable behind.
+   */
+  let deferKnowledgePersist = false;
+
+  /**
+   * Capture the exact pre-turn brain so a failed write can be undone.
+   *
+   * `KnowledgeStore.add` mutates memory immediately; persistence happens after.
+   * Without this, a rejected `persist()` -- or any throw between the two -- left
+   * the in-memory store holding a fact the durable snapshot never received, i.e.
+   * the user was told the turn failed while the brain had already changed. A
+   * persistence failure must be a failed turn in BOTH places.
+   */
+  function captureBrain(): { knowledge: readonly KnowledgeRecord[]; memory: readonly MemoryRecord[] } {
+    return { knowledge: store.all(), memory: memory.list() };
+  }
+
+  function restoreBrain(snapshot: {
+    readonly knowledge: readonly KnowledgeRecord[];
+    readonly memory: readonly MemoryRecord[];
+  }): void {
+    // `clear()` + `addMany()` is the store's own documented restore path and is
+    // exact: record objects, ids, confidence, source and order all survive.
+    store.clear();
+    store.addMany(snapshot.knowledge);
+    for (const entry of memory.list()) memory.forget(entry.key);
+    memory.restore(snapshot.memory);
+  }
+
   function persist(): void {
+    if (deferKnowledgePersist) return;
     if (storage) saveKnowledgeStore(store, storage.adapter, storage.key);
   }
 
@@ -767,12 +813,54 @@ export function createSunlandEngine(options: SunlandEngineOptions = {}): Sunland
     }
     switch (parsed.type) {
       case "statement": {
-        const record = store.add(
-          { subject: parsed.subject, relation: parsed.relation, object: parsed.object, negated: parsed.negated },
-          { source: "user" },
-        );
-        persist();
-        return personality.respond({ kind: "learned", record });
+        // Decide the outcome BEFORE writing, using the store's own read API.
+        // `KnowledgeStore.add` is idempotent per fact identity and returns the
+        // existing record unchanged, so without this check the host cannot tell
+        // a first teaching from a duplicate.
+        const triple = {
+          subject: parsed.subject,
+          relation: parsed.relation,
+          object: parsed.object,
+          negated: parsed.negated,
+        };
+        const alreadyKnown = store.has(triple);
+        // Existing facts this new one sits ALONGSIDE: same subject+relation but
+        // a different object, or the same object with the opposite `negated`.
+        //
+        // Nothing is deleted, overwritten, down-weighted or superseded -- the
+        // store keeps all of them. These records are therefore reported as
+        // still-present facts, never as something the new fact replaced;
+        // deciding which of two related facts wins belongs to a
+        // ConflictResolver, not to this layer.
+        const relatedExisting = alreadyKnown
+          ? []
+          : store
+              .match({ subject: parsed.subject, relation: parsed.relation })
+              .filter(
+                (existing) =>
+                  existing.object !== parsed.object ||
+                  existing.negated !== parsed.negated,
+              );
+        const snapshot = captureBrain();
+        const record = store.add(triple, { source: "user" });
+        try {
+          persist();
+        } catch (error) {
+          // Persistence failed, so the turn failed: undo the in-memory write so
+          // the brain is exactly what it was before the turn.
+          restoreBrain(snapshot);
+          throw error;
+        }
+        return personality.respond({
+          kind: "learned",
+          record,
+          outcome: alreadyKnown
+            ? "already-known"
+            : relatedExisting.length > 0
+              ? "related-known"
+              : "added",
+          ...(relatedExisting.length === 0 ? {} : { relatedExisting }),
+        });
       }
       case "query": {
         // Reasoner -> Response Planner -> Personality, in that order. The
@@ -830,7 +918,219 @@ export function createSunlandEngine(options: SunlandEngineOptions = {}): Sunland
     return personality.respond({ kind: "clarification", plan });
   }
 
+  /**
+   * Multi-fact teaching (B.8).
+   *
+   * Splits a turn into independently-completable facts, runs each through the
+   * ORDINARY single-fact pipeline (`processSingle`), and writes them together.
+   * Deliberately implemented as a wrapper around the existing path rather than a
+   * parallel one, so a segment cannot be validated differently just because it
+   * arrived in a list.
+   *
+   * Returns `null` when this is not a multi-fact teaching turn, in which case
+   * the caller uses `processSingle` unchanged.
+   *
+   * ATOMICITY (P0). Three things can go wrong -- a segment fails validation, a
+   * segment fails to write, or the final persist throws. In every case the
+   * in-memory store AND Memory are restored to their exact pre-turn contents, so
+   * a failed turn never leaves a partially taught brain behind. `store.all()`
+   * after a failed turn is deep-equal to what it was before.
+   */
+  function processMultiFact(
+    input: string,
+    processOptions: SunlandProcessOptions,
+  ): SunlandProcessResult | null {
+    const split = splitTeachingInput(input);
+    if (split.kind === "single") return null;
+    if (split.kind === "rejected") {
+      // Multi-fact structure was recognised and refused. Falling back to the
+      // single-fact path here would re-admit the very input the envelope (or the
+      // per-segment rules) just rejected, so the turn ends here with nothing
+      // written.
+      return multiFactFailureResult(input, `multi-fact:${split.reason}`);
+    }
+
+    const snapshot = captureBrain();
+    const restore = (): void => restoreBrain(snapshot);
+
+    // Every segment must be a teachable STATEMENT. A query, a greeting, a name
+    // introduction or a companion turn that merely contains a comma is ordinary
+    // conversation: it must not be split, so the WHOLE input is handed back to
+    // the normal pipeline untouched. Only once every segment is a statement is
+    // this a multi-fact teaching turn, and from that point on a bad segment is a
+    // refusal rather than a fallback.
+    const prepared: { readonly text: string; readonly result: ParseResult }[] = [];
+    let previousSubject: string | null = null;
+
+    for (const segment of split.segments) {
+      const text = segment.repairedText ?? (
+        segment.continuation === undefined
+          ? segment.raw
+          : previousSubject === null
+            ? null
+            : `${previousSubject}${segment.continuation.remainder}`
+      );
+      if (text === null) return null;
+
+      const parsed = parser.parse(stripTeachingCuePrefix(text));
+      if (parsed.type !== "statement") return null;
+      // The subject a later continuation may inherit is the one the parser
+      // ACTUALLY produced, not a re-derived guess.
+      previousSubject = parsed.subject;
+      prepared.push({ text, result: parsed });
+    }
+
+    const learned: LearnedFactResult[] = [];
+    const originalDefer = deferKnowledgePersist;
+    let lastSegmentResult: SunlandProcessResult | null = null;
+
+    try {
+      deferKnowledgePersist = true;
+      for (const { text, result } of prepared) {
+        const before = new Set(store.all().map((record) => record.id));
+        // Keep the last segment's result: its resolved understanding and
+        // semantic-context update describe the turn's final state, which is what
+        // the host applies back to the conversation.
+        lastSegmentResult = processSingle(text, processOptions);
+        // Derive what was taught from the store delta, so the report reflects
+        // the real write rather than a re-derivation of it.
+        const added = store.all().filter((record) => !before.has(record.id));
+        for (const record of added) {
+          learned.push(outcomeFor(record, learned));
+        }
+        if (added.length === 0) {
+          // Nothing was added because the store ALREADY held this fact --
+          // including the case where an earlier segment of this same turn just
+          // taught it. That is a legitimate outcome to report, not a failure.
+          if (result.type !== "statement" || !store.has(result)) {
+            // A segment neither wrote nor found its fact: refuse rather than
+            // report a turn whose effect we cannot account for.
+            restore();
+            return multiFactFailureResult(input, "segment-write-mismatch");
+          }
+          learned.push(outcomeForKnown(result));
+        }
+      }
+    } catch (error) {
+      restore();
+      throw error;
+    } finally {
+      deferKnowledgePersist = originalDefer;
+    }
+
+    // Single persist for the whole turn, done HERE rather than inside the
+    // per-segment calls: the segments were collected with persistence deferred,
+    // so this one write covers every fact. If it throws, the in-memory writes are
+    // rolled back and the failure propagates -- a persistence failure is a failed
+    // turn, never a successful one.
+    try {
+      persist();
+    } catch (error) {
+      restore();
+      throw error;
+    }
+
+    return multiFactSuccessResult(input, learned, lastSegmentResult);
+  }
+
+  /**
+   * Outcome for a segment whose fact the store already held. Reached only after
+   * `store.has()` confirmed the exact fact is present, so the record is always
+   * findable and no fallback guess is needed.
+   */
+  function outcomeForKnown(triple: Triple): LearnedFactResult {
+    const [record] = store.match({
+      subject: triple.subject,
+      relation: triple.relation,
+      object: triple.object,
+      negated: triple.negated,
+    });
+    if (record === undefined) {
+      throw new Error("multi-fact: known segment has no record to report");
+    }
+    return Object.freeze({ record, outcome: "already-known" as const });
+  }
+
+  /** Outcome for `record` given the facts already taught earlier in this turn. */
+  function outcomeFor(
+    record: KnowledgeRecord,
+    taughtSoFar: readonly LearnedFactResult[],
+  ): LearnedFactResult {
+    const matching = (entry: KnowledgeRecord): boolean =>
+      entry.subject === record.subject &&
+      entry.relation === record.relation &&
+      entry.object === record.object &&
+      entry.negated === record.negated;
+    if (taughtSoFar.some((entry) => matching(entry.record))) {
+      // A later segment repeating an earlier one in the SAME turn: the first
+      // taught it, so this one found it already present.
+      return Object.freeze({ record, outcome: "already-known" as const });
+    }
+    const related = store
+      .all()
+      .filter(
+        (entry) =>
+          entry.id !== record.id &&
+          entry.subject === record.subject &&
+          entry.relation === record.relation &&
+          (entry.object !== record.object || entry.negated !== record.negated),
+      );
+    return related.length === 0
+      ? Object.freeze({ record, outcome: "added" as const })
+      : Object.freeze({
+          record,
+          outcome: "related-known" as const,
+          relatedExisting: Object.freeze(related),
+        });
+  }
+
+  function multiFactSuccessResult(
+    input: string,
+    learned: readonly LearnedFactResult[],
+    lastSegmentResult: SunlandProcessResult | null,
+  ): SunlandProcessResult {
+    // Context and understanding come from the LAST segment: it is the most
+    // recent thing the user said, and its resolved reading is the one a
+    // follow-up turn would build on. A multi-fact turn deliberately does not
+    // advance conversation state once per fact.
+    const base = lastSegmentResult ?? processSingle(input, {});
+    return Object.freeze({
+      response: personality.respond({ kind: "learned-many", results: learned }),
+      semanticContextUpdate: base.semanticContextUpdate,
+      understanding: base.understanding,
+      learnedFacts: learned,
+    });
+  }
+
+  function multiFactFailureResult(
+    input: string,
+    reason: string,
+  ): SunlandProcessResult {
+    const failure = Object.freeze({
+      type: "unknown" as const,
+      raw: input,
+      reason,
+    });
+    // A refused multi-fact turn still produces a context update (the turn was
+    // heard), but it reports no understanding of a fact it did not accept.
+    const base = processSingle("", {});
+    return Object.freeze({
+      response: personality.respond({ kind: "unknown-input", failure }),
+      semanticContextUpdate: base.semanticContextUpdate,
+      understanding: base.understanding,
+    });
+  }
+
   function process(
+    input: string,
+    processOptions: SunlandProcessOptions = {},
+  ): SunlandProcessResult {
+    const multiFact = processMultiFact(input, processOptions);
+    if (multiFact !== null) return multiFact;
+    return processSingle(input, processOptions);
+  }
+
+  function processSingle(
     input: string,
     processOptions: SunlandProcessOptions = {},
   ): SunlandProcessResult {
@@ -844,16 +1144,24 @@ export function createSunlandEngine(options: SunlandEngineOptions = {}): Sunland
         : normalizeSemanticContext(
             processOptions.semanticContext ?? createEmptySemanticContext(),
           );
+    // A teaching cue ("记住 猫 属于 哺乳动物") is a wrapper around the fact, not
+    // part of it. It is removed once, here, so that the Legacy parser and the
+    // Semantic analyzer both classify the SAME text: the write gate approves a
+    // fact by comparing their two readings, and a cue left on one side only
+    // made a valid teaching turn look like a disagreement and get rejected.
+    // The helper itself refuses anything that is not a well-formed fact, so a
+    // sentence about the cue is passed through untouched.
+    const turnInput = stripTeachingCuePrefix(input);
     const conversationUnderstanding = defaultConversationAnalyzer.analyze(
-      input,
+      turnInput,
       semanticContext.conversationState,
     );
-    const legacyResult: ParseResult = parser.parse(input);
+    const legacyResult: ParseResult = parser.parse(turnInput);
     let analysis: SemanticAnalysis | undefined;
     if (semanticMode !== "off") {
       try {
         analysis = semanticAnalyze(
-          input,
+          turnInput,
           semanticContextMode === "enabled"
             ? semanticContext
             : undefined,
@@ -865,7 +1173,7 @@ export function createSunlandEngine(options: SunlandEngineOptions = {}): Sunland
     }
     const resolvedTurnUnderstanding = resolveTurnUnderstanding(
       createTurnCandidatePool({
-        rawInput: input,
+        rawInput: turnInput,
         parserResult: legacyResult,
         conversation: conversationUnderstanding,
         ...(analysis === undefined ? {} : { semanticAnalysis: analysis }),

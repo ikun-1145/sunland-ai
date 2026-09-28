@@ -161,16 +161,11 @@ function findLexiconOccurrences(
 
   for (const entry of SEMANTIC_LEXICON) {
     const entryMatches: LexiconOccurrence[] = [];
-    const aliases = [...entry.aliases].sort(
-      (left, right) =>
-        right.length - left.length || left.localeCompare(right),
-    );
 
-    for (const originalAlias of aliases) {
-      const alias = originalAlias
-        .trim()
-        .replace(/\s+/gu, " ")
-        .toLocaleLowerCase("und");
+    // `entry.normalizedAliases` is precomputed once at lexicon load: match form,
+    // longest first. Normalizing here instead would repeat identical work for
+    // every entry on every turn.
+    for (const { surface: originalAlias, match: alias } of entry.normalizedAliases) {
       let searchFrom = 0;
 
       while (alias.length > 0) {

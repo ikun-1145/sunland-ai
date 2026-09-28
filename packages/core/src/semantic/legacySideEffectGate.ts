@@ -2,6 +2,8 @@ import {
   hasExplicitSideEffectProhibition,
   hasUnsafeLegacySideEffectStructure,
 } from "@/parser/sideEffectSafety";
+import { canonicalStatementTriple } from "@/parser/teachingCanonical";
+import { normalizeSemanticMatchText } from "./normalize";
 import type {
   ParseResult,
   ParsedIntent,
@@ -78,6 +80,24 @@ export function isLegacySideEffectResult(
   return result.type === "statement" || isRememberNameResult(result);
 }
 
+/**
+ * A negated statement whose negation is fully absorbed into the triple: the
+ * parser captured a real subject, a real object, and the `negated` flag, so
+ * `{s, r, o, true}` is the proposition the user asserted. Anything less (an
+ * empty or missing side, a failed parse) is NOT complete, and a negation on an
+ * incomplete reading is what makes a write unsafe -- "猫不会" could be denying
+ * anything.
+ */
+function isCompleteNegatedStatement(result: ParseResult): boolean {
+  return (
+    result.type === "statement" &&
+    result.negated &&
+    result.subject.trim().length > 0 &&
+    result.relation.trim().length > 0 &&
+    result.object.trim().length > 0
+  );
+}
+
 function effectiveSideEffect(candidate: SemanticCandidate): boolean {
   return (
     candidate.sideEffect !== "none" ||
@@ -87,40 +107,40 @@ function effectiveSideEffect(candidate: SemanticCandidate): boolean {
   );
 }
 
-function normalized(value: string): string {
-  return value.trim().replace(/\s+/gu, " ").toLocaleLowerCase("und");
-}
 
+/**
+ * The comparison key for an approved knowledge write.
+ *
+ * Delegates relation/object normalization to the SAME pure function the
+ * Legacy statement pattern now applies before persisting (`parser/
+ * teachingCanonical.ts`), so the key a write is approved under and the fact
+ * that actually reaches the store cannot drift apart. Keeping a second,
+ * private copy of the `是`->`属于` / `一种` rules here is exactly how
+ * `猫是一种哺乳动物` was once approved as `猫 属于 哺乳动物` and then stored
+ * as `猫 是 一种哺乳动物`.
+ */
 function normalizedStatementParts(
   statement: ParsedStatement,
   analysis: SemanticAnalysis,
 ): readonly [string, string, string, boolean] {
-  let relation = normalized(statement.relation);
-  let object = normalized(statement.object);
   const hasIsAConcept = analysis.extraction.relations.some(
     ({ conceptId }) => conceptId === "is-a",
   );
-  if (
-    relation === "是" &&
-    hasIsAConcept
-  ) {
-    relation = "属于";
-  }
-  if (
-    relation === "属于" &&
-    object.startsWith("一种") &&
-    object.length > "一种".length
-  ) {
-    object = object.slice("一种".length);
-  }
-  if (relation === "指的是") {
-    relation = "意思是";
-  }
-  return Object.freeze([
-    normalized(statement.subject),
-    relation,
-    object,
+  const [subject, relation, object, negated] = canonicalStatementTriple(
+    statement.subject,
+    statement.relation,
+    statement.object,
     statement.negated,
+    hasIsAConcept,
+  );
+  // `指的是`/`意思是` are the same "means" relation under two surface words.
+  const canonicalRelation =
+    relation === "指的是" ? "意思是" : relation;
+  return Object.freeze([
+    normalizeSemanticMatchText(subject),
+    canonicalRelation,
+    normalizeSemanticMatchText(object),
+    negated,
   ]);
 }
 
@@ -138,7 +158,7 @@ function sideEffectInterpretationKey(
     const name = result.entities[0];
     return name === undefined
       ? null
-      : `memory:name:${normalized(name)}`;
+      : `memory:name:${normalizeSemanticMatchText(name)}`;
   }
   return null;
 }
@@ -264,7 +284,16 @@ export function evaluateLegacySideEffectFallback(
     });
   }
 
-  if (analysis.extraction.negationCues.length > 0) {
+  // A negation on a COMPLETE statement is a storable fact, not an unsafe
+  // write: "企鹅不会飞" is exactly the kind of exception the knowledge base
+  // needs, and blocking every negation here made `negated` unreachable on the
+  // write path. An incomplete negated reading is still refused below by the
+  // completeness checks and by `hasUnsafeLegacySideEffectStructure`, so this
+  // no longer needs the blanket veto it used to carry.
+  if (
+    analysis.extraction.negationCues.length > 0 &&
+    !isCompleteNegatedStatement(legacyResult)
+  ) {
     return block("negation-detected");
   }
   if (analysis.extraction.questionCues.length > 0) {

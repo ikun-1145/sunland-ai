@@ -28,6 +28,26 @@ import type { ReasoningResult } from "./reasoning";
 import type { DialogueTurnContext } from "./dialogue";
 
 /**
+ * How a taught fact related to what the store already held. See the
+ * `"learned"` member of `ResponseContext` for the exact semantics.
+ */
+export type LearnedOutcome = "added" | "already-known" | "related-known";
+
+/**
+ * One fact taught during a multi-fact turn.
+ *
+ * `outcome` is computed against the store state at the START of the turn plus
+ * the facts taught EARLIER IN THE SAME TURN, so teaching "猫会飞，猫会飞" reports
+ * the first as added and the second as already-known -- matching the store's
+ * final contents rather than depending on when the write happened.
+ */
+export interface LearnedFactResult {
+  readonly record: KnowledgeRecord;
+  readonly outcome: LearnedOutcome;
+  readonly relatedExisting?: readonly KnowledgeRecord[];
+}
+
+/**
  * Every "moment" a chat-facing module may need styled text for. Adding a new
  * kind of moment (e.g. a future `"farewell"`) is additive — existing
  * personas simply won't have a case for it until updated, which TypeScript's
@@ -54,7 +74,48 @@ export type ResponseContext =
     }
   | { readonly kind: "dialogue"; readonly turn: DialogueTurnContext }
   | { readonly kind: "clarification"; readonly plan: ClarificationPlan }
-  | { readonly kind: "learned"; readonly record: KnowledgeRecord }
+  /**
+   * A knowledge fact was taught.
+   *
+   * `outcome` exists because `KnowledgeStore.add` is idempotent per fact
+   * identity and silently returns the already-stored record, so a persona that
+   * only saw `record` could not tell a first teaching from a duplicate and
+   * announced "记下了" either way -- which is not true the second time.
+   *
+   *   - `"added"`         the fact is new; nothing related was stored before.
+   *   - `"already-known"` the identical canonical fact was already stored.
+   *                       Nothing changed, and `record` is the EXISTING record
+   *                       (its `id`, `createdAt`, `confidence` and `source` are
+   *                       untouched).
+   *   - `"related-known"` the store already held facts with the same
+   *                       subject+relation but a different object or a
+   *                       different `negated`, and they are STILL THERE. The
+   *                       new fact is an addition alongside them;
+   *                       `relatedExisting` lists them so the reply can show
+   *                       what else is known.
+   *
+   * `"related-known"` deliberately does NOT mean "updated" or "replaced".
+   * Nothing is deleted, overwritten, down-weighted or superseded here: the
+   * store keeps both facts, so a reply claiming an update would describe a
+   * state that does not exist. Deciding which of two related facts wins is the
+   * job of a ConflictResolver, not of this layer.
+   *
+   * Optional so a host constructing this context by hand keeps working;
+   * omitted means `"added"`, the historical behaviour.
+   */
+  | {
+      readonly kind: "learned";
+      readonly record: KnowledgeRecord;
+      readonly outcome?: LearnedOutcome;
+      /** Retained facts with the same subject+relation. Never superseded. */
+      readonly relatedExisting?: readonly KnowledgeRecord[];
+    }
+  /**
+   * Several facts were taught by ONE turn (B.8). Reported per fact so the reply
+   * can be checked against the store, exactly like the single-fact `"learned"`
+   * case: a multi-fact turn must not blur which facts actually landed.
+   */
+  | { readonly kind: "learned-many"; readonly results: readonly LearnedFactResult[] }
   | { readonly kind: "unknown-input"; readonly failure: ParseFailure }
   /**
    * `raw` is OPTIONAL and deliberately not the "fact" of the moment (there is

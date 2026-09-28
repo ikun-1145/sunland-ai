@@ -12,6 +12,8 @@ export interface Env {
   SUPABASE_SERVICE_ROLE_KEY?: string;
   CORS_ORIGINS: string;
   CORE_VERSION: string;
+  CF_VERSION_METADATA?: { id: string; tag?: string; timestamp?: string };
+  TRACE_ENVIRONMENT?: "production" | "staging" | "development";
 }
 
 export interface AuthenticatedUser {

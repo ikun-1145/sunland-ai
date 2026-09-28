@@ -31,6 +31,10 @@ import {
   isaTransitivityRule,
   traverseIsAForQuery,
 } from "@/rules";
+import { matchByEntity } from "./entityLookup";
+import { answerComparator } from "./answerOrdering";
+import { derivedCapabilityAnswers } from "./capabilityPropagation";
+import { resolveConflicts } from "./conflictResolver";
 import {
   createRelationResolutionEvidence,
   relationResolutionPolicy,
@@ -44,7 +48,10 @@ const NO_KNOWN_FACTS_EXPLANATION = "目前还没有已知的相关事实。";
 
 /** Direct, already-known facts matching the query pattern (any relation). */
 function directAnswers(query: ParsedQuery, known: KnowledgeQuery): readonly Inference[] {
-  const matches = known.match({
+  // `matchByEntity` tries an exact subject first and only falls back to a
+  // whitespace-insensitive comparison, so a fact taught as "Alice Chen" stays
+  // reachable from a query the Legacy grammar compacted to "AliceChen".
+  const matches = matchByEntity(known, {
     subject: query.subject,
     relation: query.relation,
     ...(query.object !== undefined ? { object: query.object } : {}),
@@ -85,19 +92,57 @@ function describeAnswer(answer: Inference): string {
   return `${subject} ${negation}${relation} ${object}（推理路径：${answer.path.join(" → ")}）`;
 }
 
+/**
+ * Apply the shared total order (`answerOrdering.ts`). Record identity for the
+ * final tie-breaker keys comes from the store this query ran against; a store
+ * that cannot enumerate its records simply leaves those keys empty and the
+ * earlier keys still decide.
+ */
+function sortAnswers(
+  answers: readonly Inference[],
+  known: KnowledgeQuery,
+): readonly Inference[] {
+  return Object.freeze([...answers].sort(answerComparator(known)));
+}
+
 function reasoningResult(
   query: ParsedQuery,
   answers: readonly Inference[],
+  known: KnowledgeQuery,
+  /**
+   * Candidates that must be ADJUDICATED but must not be ADDED to `answers`.
+   *
+   * Used for the fixed-object query path: when a direct fact already answers
+   * "is it X?", the answer set stays exactly that fact, but an inherited
+   * capability that contradicts it still has to be reported, or the reply would
+   * silently hide the disagreement.
+   */
+  adjudicationOnly: readonly Inference[] = [],
 ): ReasoningResult {
+  // Sort first (B.6's display order), then adjudicate contradictions (B.5).
+  // Adjudication runs last so it sees a deterministic input, and it is the only
+  // thing that can remove an answer -- the store is never touched.
+  const ordered = sortAnswers(answers, known);
+  const resolved = resolveConflicts(
+    adjudicationOnly.length === 0
+      ? ordered
+      : [...ordered, ...sortAnswers(adjudicationOnly, known)],
+    known,
+  );
+
+  const factSentences = resolved.answers.map(describeAnswer);
+  const conflictSentences = resolved.conflicts.map(
+    (conflict) => conflict.description,
+  );
   const explanation =
-    answers.length > 0
-      ? answers.map(describeAnswer).join("；")
+    factSentences.length + conflictSentences.length > 0
+      ? [...factSentences, ...conflictSentences].join("；")
       : NO_KNOWN_FACTS_EXPLANATION;
 
   return {
     query,
-    answers,
-    conflicts: [],
+    answers: resolved.answers,
+    conflicts: resolved.conflicts,
     explanation,
   };
 }
@@ -108,16 +153,38 @@ function answerExact(
 ): ReasoningResult {
   const direct = directAnswers(query, known);
   if (query.object !== undefined && direct.length > 0) {
-    return reasoningResult(query, direct);
+    // A direct fact settles the question, so the ANSWER SET is just that fact.
+    // Its inherited counterpart is still adjudicated so a contradiction is
+    // disclosed rather than hidden -- B.5 decides, with no rule added here.
+    return reasoningResult(
+      query,
+      direct,
+      known,
+      derivedCapabilityAnswers(query, known),
+    );
   }
   const knownObjects = new Set(
     direct.map((answer) => answer.conclusion.object),
   );
-  const derived = derivedIsAAnswers(query, known).filter(
-    (answer) => !knownObjects.has(answer.conclusion.object),
+  // Two independent derivation sources, with disjoint value ranges:
+  //   - isaTransitivity answers only `属于` (transitive class membership),
+  //   - capabilityPropagation answers only the whitelisted capability
+  //     relations (`会` / `有`).
+  // They cannot produce the same triple, so no ordering between them is needed.
+  const derived = [
+    ...derivedIsAAnswers(query, known),
+    ...derivedCapabilityAnswers(query, known),
+  ].filter(
+    (answer) =>
+      !knownObjects.has(answer.conclusion.object) &&
+      // A fixed object stays fixed: with no direct match, only a derived answer
+      // that asserts THAT object may answer the query.
+      (query.object === undefined || answer.conclusion.object === query.object),
   );
 
-  return reasoningResult(query, [...direct, ...derived]);
+  // One explicit total order for both kinds of answer, so what the user sees no
+  // longer depends on the order facts happened to be inserted in.
+  return reasoningResult(query, [...direct, ...derived], known);
 }
 
 function legacyClassificationObject(
@@ -211,7 +278,7 @@ export function answerGraphQuery(
       ).answers;
 
   return Object.freeze({
-    result: reasoningResult(query, answers),
+    result: reasoningResult(query, answers, known),
     relationResolution: createRelationResolutionEvidence(
       "fallback",
       query.relation,

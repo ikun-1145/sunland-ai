@@ -69,4 +69,79 @@ describe("createStatementPattern", () => {
   ])("rejects unsafe side-effect structure '%s'", (input) => {
     expect(canPattern.match(input, input)).toBeNull();
   });
+
+  describe("canonical stored form", () => {
+    it("drops the '一种' wrapper so the fact is visible to 属于 inference", () => {
+      const isACuePattern = createStatementPattern("属于", ["属于", "是一种"]);
+      expect(isACuePattern.match("猫是一种哺乳动物")).toMatchObject({
+        subject: "猫",
+        relation: "属于",
+        object: "哺乳动物",
+      });
+    });
+
+    it("keeps a bare 是 statement as identity, not classification", () => {
+      // 苏格拉底 是 人 is instance-of; promoting it to 属于 would change
+      // answers on the Legacy-only path.
+      const isPattern = createStatementPattern(CoreRelations.Is);
+      expect(isPattern.match("苏格拉底是人")).toMatchObject({
+        relation: "是",
+        object: "人",
+      });
+    });
+
+    it("promotes a 是 statement whose object carries the 一种 wrapper", () => {
+      // The wrapper is itself the is-a signal, so this holds even when no
+      // semantic is-a cue is available to the Legacy layer.
+      const isPattern = createStatementPattern(CoreRelations.Is);
+      expect(isPattern.match("猫是一种哺乳动物")).toMatchObject({
+        relation: "属于",
+        object: "哺乳动物",
+      });
+    });
+
+    it("is idempotent for an already-canonical statement", () => {
+      expect(isAPattern.match("猫属于哺乳动物")).toMatchObject({
+        subject: "猫",
+        relation: "属于",
+        object: "哺乳动物",
+      });
+    });
+
+    it.each([
+      "记住 猫 属于 哺乳动物",
+      "教你 猫 属于 哺乳动物",
+      "告诉你一个知识 猫 属于 哺乳动物",
+      "记住这个事实 猫 属于 哺乳动物",
+      "记住猫属于哺乳动物",
+    ])("strips the teaching cue from '%s'", (input) => {
+      expect(isAPattern.match(input, input)).toMatchObject({
+        subject: "猫",
+        relation: "属于",
+        object: "哺乳动物",
+      });
+    });
+
+    it.each([
+      "记住这个事实很重要",
+      "记住这个事实是真的",
+      "记住猫属于哺乳动物吗",
+    ])("does not strip a cue that is part of the statement itself: '%s'", (input) => {
+      // Stripping here would invent a fact that was never taught.
+      const result = isAPattern.match(input, input);
+      expect(result === null || result.type !== "statement" || result.subject !== "猫")
+        .toBe(true);
+    });
+
+    it("keeps the user's original text in raw", () => {
+      expect(isAPattern.match("记住 猫 属于 哺乳动物", "记住 猫 属于 哺乳动物"))
+        .toMatchObject({ raw: "记住 猫 属于 哺乳动物" });
+    });
+
+    it("still applies the safety gate to the original wording", () => {
+      // Stripping a cue must never turn a rejected input into an accepted one.
+      expect(isAPattern.match("记住 猫会飞还是会游泳", "记住 猫会飞还是会游泳"))
+        .toBeNull();
+    });
+  });
 });

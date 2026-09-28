@@ -24,7 +24,27 @@ interface MemoryRow {
 interface ContextRow { context: unknown }
 interface TurnResultRow { request_hash: string; response: TurnResponse }
 
+/**
+ * How many rows to ask for per page. PostgREST also caps a single response at
+ * the server's own `db-max-rows`, so a smaller server cap only means more
+ * pages -- never a truncated read (see `requestAllRows`).
+ */
+const READ_PAGE_SIZE = 1000;
+
 export class RevisionConflictError extends Error {}
+
+/**
+ * Total row count from a PostgREST `Content-Range: <from>-<to>/<total>`
+ * response header. Returns `null` when the header is absent or the total is
+ * unknown (`*`), which callers must treat as "cannot prove completeness".
+ */
+function contentRangeTotal(header: string | null): number | null {
+  if (header === null) return null;
+  const total = header.slice(header.lastIndexOf("/") + 1).trim();
+  if (total === "" || total === "*") return null;
+  const parsed = Number(total);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+}
 
 export class SupabaseRepository {
   private readonly baseUrl: string;
@@ -33,7 +53,87 @@ export class SupabaseRepository {
     this.baseUrl = `${url.replace(/\/$/u, "")}/rest/v1`;
   }
 
+  /**
+   * Read every row a query matches, paginating until PostgREST reports the
+   * full total has been seen.
+   *
+   * A single unpaginated read silently returns only the server's first page:
+   * the rows stay in the database, but the engine never sees them, so a user
+   * with more facts than one page would be answered from a partial knowledge
+   * base with no error anywhere. Returning a wrong answer is worse than
+   * failing the turn, so an unprovable read fails closed with 503 instead of
+   * being reported as a successful one.
+   *
+   * The `path` must carry a `limit` (the requested page size) and a
+   * deterministic total order; `Range` selects the window within that order.
+   */
+  private async requestAllRows<T>(path: string): Promise<T[]> {
+    const rows: T[] = [];
+    let from = 0;
+
+    for (;;) {
+      const { page, exhausted, total } = await this.requestWithRange<T>(path, from);
+      rows.push(...page);
+
+      // 416 means the window starts past the end of the result set: the rows
+      // that were requested next are gone (concurrent deletion), so there is
+      // nothing left to read and no failure.
+      if (exhausted) return rows;
+
+      if (total === null) {
+        throw new HttpError(
+          503,
+          "persistence_unavailable",
+          "AI 记忆服务返回了无法确认完整性的数据，请使用同一请求重试。\n",
+        );
+      }
+      if (rows.length >= total) return rows;
+      // A paged read that stops making progress would silently truncate, so
+      // treat it as a persistence failure rather than an empty tail.
+      if (page.length <= 0) {
+        throw new HttpError(
+          503,
+          "persistence_unavailable",
+          "AI 记忆服务返回了不完整的数据，请使用同一请求重试。\n",
+        );
+      }
+      from += page.length;
+    }
+  }
+
+  private async requestWithRange<T>(
+    path: string,
+    from: number,
+  ): Promise<{ page: T[]; exhausted: boolean; total: number | null }> {
+    const headers = new Headers();
+    headers.set("range", `${from}-${from + READ_PAGE_SIZE - 1}`);
+    const { body, contentRange, status } = await this.requestWithHeaders<T[]>(
+      path,
+      { headers },
+      // A window past the end of the result set is a legal "nothing left",
+      // not a failure: rows deleted between pages must not fail the turn.
+      [416],
+    );
+    if (status === 416) return { page: [], exhausted: true, total: 0 };
+    return {
+      page: Array.isArray(body) ? body : [],
+      exhausted: false,
+      total: contentRangeTotal(contentRange),
+    };
+  }
+
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const { body } = await this.requestWithHeaders<T>(path, init);
+    return body;
+  }
+
+  /** Single transport path shared by every read/write; see `request`. */
+  private async requestWithHeaders<T>(
+    path: string,
+    init: RequestInit = {},
+    /** Statuses this caller treats as an expected, non-fatal outcome. */
+    toleratedStatuses: readonly number[] = [],
+  ): Promise<{ body: T; contentRange: string | null; status: number }> {
     const headers = new Headers(init.headers);
     headers.set("apikey", this.serverKey);
     if (this.serverKey.startsWith("sb_secret_")) {
@@ -43,7 +143,7 @@ export class SupabaseRepository {
     }
     headers.set("content-type", "application/json");
     const response = await fetch(`${this.baseUrl}${path}`, { ...init, headers });
-    if (!response.ok) {
+    if (!response.ok && !toleratedStatuses.includes(response.status)) {
       const detail = await response.text();
       if (detail.includes("40001") || detail.includes("revision_conflict")) {
         throw new RevisionConflictError("revision conflict");
@@ -61,8 +161,25 @@ export class SupabaseRepository {
       });
       throw new HttpError(503, "persistence_unavailable", "AI 记忆服务暂时不可用，请使用同一请求重试。\n");
     }
-    if (response.status === 204) return undefined as T;
-    return await response.json() as T;
+    if (response.status === 204) {
+      return {
+        body: undefined as T,
+        contentRange: response.headers.get("content-range"),
+        status: response.status,
+      };
+    }
+    if (toleratedStatuses.includes(response.status)) {
+      return {
+        body: [] as unknown as T,
+        contentRange: response.headers.get("content-range"),
+        status: response.status,
+      };
+    }
+    return {
+      body: await response.json() as T,
+      contentRange: response.headers.get("content-range"),
+      status: response.status,
+    };
   }
 
   async getTurnResult(userId: string, turnId: string): Promise<TurnResultRow | null> {
@@ -76,8 +193,15 @@ export class SupabaseRepository {
     const encodedUser = encodeURIComponent(userId);
     const [states, knowledge, memory, contexts] = await Promise.all([
       this.request<StateRow[]>(`/sunland_ai_user_state?select=revision&user_id=eq.${encodedUser}&limit=1`),
-      this.request<KnowledgeRow[]>(`/sunland_ai_knowledge?select=id,subject,relation,object,negated,confidence,source,created_at&user_id=eq.${encodedUser}&order=created_at.asc,id.asc`),
-      this.request<MemoryRow[]>(`/sunland_ai_memory?select=id,key,value,created_at,updated_at&user_id=eq.${encodedUser}&order=key.asc`),
+      // Knowledge and memory grow with use, so both are read to completion
+      // instead of trusting the server's first page. Ordering is total and
+      // identical to the commit ordering, so pages cannot overlap or skip.
+      this.requestAllRows<KnowledgeRow>(
+        `/sunland_ai_knowledge?select=id,subject,relation,object,negated,confidence,source,created_at&user_id=eq.${encodedUser}&order=created_at.asc,id.asc&limit=${READ_PAGE_SIZE}`,
+      ),
+      this.requestAllRows<MemoryRow>(
+        `/sunland_ai_memory?select=id,key,value,created_at,updated_at&user_id=eq.${encodedUser}&order=key.asc&limit=${READ_PAGE_SIZE}`,
+      ),
       this.request<ContextRow[]>(`/sunland_ai_context?select=context&user_id=eq.${encodedUser}&conversation_id=eq.${encodeURIComponent(conversationId)}&limit=1`),
     ]);
     return {

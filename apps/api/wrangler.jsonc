@@ -14,10 +14,14 @@
     "enabled": true,
     "head_sampling_rate": 1
   },
+  "version_metadata": {
+    "binding": "CF_VERSION_METADATA"
+  },
   "vars": {
     "APP_JWT_ISSUER": "sunland-api",
     "CORS_ORIGINS": "https://sunland.dev,https://www.sunland.dev",
-    "CORE_VERSION": "0.1.0"
+    "CORE_VERSION": "0.1.0",
+    "TRACE_ENVIRONMENT": "production"
   },
   "secrets": {
     "required": [
@@ -47,6 +51,9 @@
   "env": {
     "staging": {
       "name": "sunland-ai-core-staging",
+      "version_metadata": {
+        "binding": "CF_VERSION_METADATA"
+      },
       "routes": [
         {
           "pattern": "ai-core-staging.sunland.dev",
@@ -56,7 +63,8 @@
       "vars": {
         "APP_JWT_ISSUER": "sunland-api",
         "CORS_ORIGINS": "https://sunland.dev,https://www.sunland.dev,http://localhost:8788,http://localhost:8000",
-        "CORE_VERSION": "0.1.0"
+        "CORE_VERSION": "0.1.0",
+        "TRACE_ENVIRONMENT": "staging"
       },
       "secrets": {
         "required": [

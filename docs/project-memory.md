@@ -66,6 +66,15 @@ pending, available, and so on).
 - `supabaseRepository.ts`: REST reads/deletes and transactional RPC commits/imports.
 - `validation.ts`: bounds turn and legacy migration inputs before state changes.
 
+The local Phase 2 API implementation accepts a validated W3C `traceparent`, forwards
+the same trace to the Durable Object, and exposes `X-Sunland-Trace-Id` to clients.
+The Worker records an `EDGE_REQUEST` span; the Durable Object records bounded
+`CORE_ENGINE` and `PERSISTENCE` spans without changing `turnId`, Core decisions,
+or the turn response. Trace and span writes are independent, best effort, and
+exclude user input. These changes have **not been deployed**. Cloudflare version
+metadata supplies a deployment ID when available; until a commit SHA is verified
+and injected, `service_version` is `UNVERIFIED`.
+
 ### `apps/playground`
 
 The Playground is a multilingual Vite/React visual scaffold with four placeholder panels. It is not connected to `apps/api`, does not visualize live reasoning, and is not a production client. Do not present planned panels as implemented features.

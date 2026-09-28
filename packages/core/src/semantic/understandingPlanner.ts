@@ -1,3 +1,4 @@
+import { normalizeSemanticMatchText } from "./normalize";
 import { SEMANTIC_SCORING } from "./scoring";
 import {
   DEFAULT_UNDERSTANDING_POLICY,
@@ -88,10 +89,6 @@ function requiredEvidence(
   return uniqueSorted(values, REQUIRED_EVIDENCE_ORDER);
 }
 
-function normalizedValue(value: string): string {
-  return value.trim().replace(/\s+/gu, " ").toLocaleLowerCase("und");
-}
-
 function hasIsAConcept(analysis: SemanticAnalysis): boolean {
   return analysis.extraction.relations.some(
     ({ conceptId }) => conceptId === "is-a",
@@ -116,7 +113,7 @@ function canonicalObject(
   relation: string,
   object: string,
 ): string {
-  const normalized = normalizedValue(object);
+  const normalized = normalizeSemanticMatchText(object);
   if (
     canonicalRelation(analysis, relation) === "属于" &&
     normalized.startsWith("一种") &&
@@ -141,12 +138,12 @@ function interpretationKey(
       return [
         "intent",
         result.intent,
-        ...result.entities.map(normalizedValue),
+        ...result.entities.map(normalizeSemanticMatchText),
       ].join(":");
     case "statement":
       return [
         "statement",
-        normalizedValue(result.subject),
+        normalizeSemanticMatchText(result.subject),
         canonicalRelation(analysis, result.relation),
         canonicalObject(analysis, result.relation, result.object),
         result.negated,
@@ -155,7 +152,7 @@ function interpretationKey(
       return [
         "query",
         result.kind,
-        normalizedValue(result.subject),
+        normalizeSemanticMatchText(result.subject),
         canonicalRelation(analysis, result.relation),
         result.object === undefined
           ? ""
@@ -285,6 +282,55 @@ function isNegated(candidate: SemanticCandidate): boolean {
   );
 }
 
+/**
+ * First-person subjects. Deliberately a short, explicit, exact-match list -- not
+ * a fuzzy or pronoun-inference mechanism.
+ *
+ * Note the existing `SELF_REFERENCES` / `isSemanticSelfReference` helpers mean
+ * the ASSISTANT ("你", "Sunland AI"), which is the opposite of what is needed
+ * here, so this cannot reuse them.
+ */
+const FIRST_PERSON_SUBJECTS: ReadonlySet<string> = new Set([
+  "我",
+  "我们",
+  "咱",
+  "咱们",
+  "自己",
+]);
+
+/** True for a statement whose subject is the user speaking about themselves. */
+function isAboutTheUser(subject: string): boolean {
+  return FIRST_PERSON_SUBJECTS.has(
+    subject.trim().replace(/\s+/gu, " ").toLocaleLowerCase("und"),
+  );
+}
+
+/**
+ * A negated statement whose negation is fully absorbed into the triple: the
+ * parser produced a real subject, relation and object, so `{s, r, o, true}` is
+ * exactly the proposition asserted. This is the only negated shape allowed to
+ * reach a write.
+ *
+ * A statement about the user is excluded on purpose. "我不是小明" parses as a
+ * complete negated statement about "我", but the account holder denying a claim
+ * about themselves is not a world fact, and a denial is a weak way to learn
+ * what IS true -- knowing "我 不是 小明" does not establish who the user is.
+ * First-person self-descriptions stay Memory's concern, and their positive
+ * forms ("我叫小明") already go there.
+ */
+function isCompleteNegatedStatement(candidate: SemanticCandidate): boolean {
+  const result = candidate.result;
+  return (
+    result?.type === "statement" &&
+    result.negated &&
+    candidate.missingSlots.length === 0 &&
+    !isAboutTheUser(result.subject) &&
+    result.subject.trim().length > 0 &&
+    result.relation.trim().length > 0 &&
+    result.object.trim().length > 0
+  );
+}
+
 function hasExplicitName(candidate: SemanticCandidate): boolean {
   if (
     candidate.result?.type !== "intent" ||
@@ -301,8 +347,8 @@ function hasExplicitName(candidate: SemanticCandidate): boolean {
   return candidate.entities.some(
     (entity) =>
       entity.kind === "person-name" &&
-      normalizedValue(entity.value) ===
-        normalizedValue(rememberedName),
+      normalizeSemanticMatchText(entity.value) ===
+        normalizeSemanticMatchText(rememberedName),
   );
 }
 
@@ -374,7 +420,13 @@ function assessSideEffect(
   }
   if (
     policy.negationPolicy.rejectNegatedSideEffects &&
-    isNegated(candidate)
+    // A negation is only acceptable as a complete STATEMENT proposition:
+    // "企鹅不会飞" is a first-class fact, and refusing every negation outright
+    // made `negated` unreachable on the write path. Everything else keeps the
+    // original strictness -- a negated intent ("我不是小明" denies a name claim),
+    // or a negated reading with a missing slot, is not a fact to store.
+    isNegated(candidate) &&
+    !isCompleteNegatedStatement(candidate)
   ) {
     required.push("non-negated-assertion");
     reasons.push("negation-conflict");

@@ -6,6 +6,7 @@ import {
   LEGACY_SIDE_EFFECT_LIMITS,
   normalizeCapturedValue,
 } from "../sideEffectSafety";
+import { stripTeachingCuePrefixWhen } from "../teachingCanonical";
 
 /**
  * RememberName intent: "我叫刘锡泽" / "我的名字是刘锡泽" / "叫我锡泽".
@@ -35,13 +36,30 @@ const TRAILING_FILLER = /[呀啊呢哦啦吧~～]+$/u;
 const ONLY_PUNCTUATION = /^[\p{P}\p{S}\s]+$/u;
 
 function extractSafeName(input: string): string | null {
+  // Safety is judged on the user's original text -- removing a teaching cue
+  // must never turn a rejected input into an accepted one.
   const singleOperation = input.trim().replace(GREETING_PREFIX, "");
   if (hasUnsafeLegacySideEffectStructure(singleOperation)) {
     return null;
   }
+  const direct = matchName(singleOperation);
+  if (direct !== null) return direct;
 
+  // "记住 我叫小明" is the same teaching command as "我叫小明"; the cue is a
+  // wrapper, not part of the name. A cue is only removed when a name pattern
+  // actually matches what follows it, so a sentence ABOUT the cue
+  // ("记住这个事实很重要") is never mined for a name.
+  return matchName(
+    stripTeachingCuePrefixWhen(
+      singleOperation,
+      (remainder) => matchName(remainder) !== null,
+    ),
+  );
+}
+
+function matchName(statement: string): string | null {
   for (const pattern of NAME_PATTERNS) {
-    const matched = pattern.exec(singleOperation);
+    const matched = pattern.exec(statement);
     if (!matched) continue;
     const name = normalizeCapturedValue(matched[1] ?? "")
       .replace(TRAILING_FILLER, "")

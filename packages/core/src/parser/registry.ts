@@ -36,6 +36,11 @@
  */
 import { CoreRelations, type GrammarPattern, type Relation } from "@/types";
 import {
+  ADDITIONAL_RELATIONS,
+  relationAliasesForUnambiguousQuery,
+  relationAliasesLongestFirst,
+} from "./relationVocabulary";
+import {
   createLocatePattern,
   createObjectOfPattern,
   createStatementPattern,
@@ -44,10 +49,17 @@ import {
 } from "./patterns";
 
 /**
- * Relations that get the full statement / object-of / verify pattern trio.
+ * Relations that get the full statement + object-of + verify + why grammar.
  * `CoreRelations.LocatedIn` ("在") is deliberately included: without a way to
  * assert "猫在屋顶", the "猫在哪里" location query would have no facts to
  * ever match against.
+ *
+ * The surface words are NOT written here any more -- they come from
+ * `relationVocabulary.ts`, which `semantic/lexicon.ts` also draws on, so the
+ * set of relations a user can TEACH can no longer drift from the set Semantic
+ * can UNDERSTAND. `CoreRelations.Is` ("是") keeps its own entry because it is
+ * also the head of the interrogative vocabulary ("是什么") and therefore needs
+ * a narrower alias set than the vocabulary's is-a entry.
  */
 const RELATIONS_WITH_FULL_GRAMMAR: readonly Relation[] = [
   CoreRelations.IsA,
@@ -55,20 +67,71 @@ const RELATIONS_WITH_FULL_GRAMMAR: readonly Relation[] = [
   CoreRelations.Can,
   CoreRelations.Likes,
   CoreRelations.LocatedIn,
+  ADDITIONAL_RELATIONS.Has,
 ];
 
-const ADDITIONAL_STATEMENT_PATTERNS: readonly GrammarPattern[] = [
-  createStatementPattern("意思是", ["指的是", "意思是"]),
-  createStatementPattern("有"),
+/**
+ * Relations that only ever get a statement pattern, and whose patterns are
+ * registered BEFORE the full-grammar statements.
+ *
+ * This ordering is load-bearing, not cosmetic. `参考 意思是 ...` and `有` own
+ * multi-character aliases (`意思是`, `指的是`, `拥有`, `具备`) that CONTAIN a
+ * full-grammar relation word (`是`, `有`). If the shorter relation's statement
+ * pattern ran first, its non-greedy subject group would happily stop inside the
+ * longer alias and store a corrupted subject -- exactly the
+ * `猫拥有爪子` → `{猫拥, 有, 爪子}` defect this batch fixes. Running the
+ * longer-alias patterns first means the longer match is claimed before the
+ * shorter one can cut into it.
+ */
+/**
+ * Which relations get a statement pattern, and in which ORDER those patterns are
+ * tried.
+ *
+ * The order is load-bearing, not cosmetic. `意思是`/`指的是`/`拥有`/`具备`/
+ * `是一种`/`能够` contain a shorter registered relation word (`是`, `有`, `会`)
+ * as a substring. A statement pattern's subject group is non-greedy, so if the
+ * shorter relation's pattern were tried first it would stop inside the longer
+ * alias and store a corrupted subject -- exactly the `猫拥有爪子` ->
+ * `{猫拥, 有, 爪子}` defect this batch fixes. Sorting by the relation's LONGEST
+ * alias puts the multi-character aliases in front, so the longer match is always
+ * claimed first.
+ *
+ * `意思是` is statement-only: it has no object-of/verify/why form ("A 意思是
+ * 什么" is the interrogative `是什么`, handled by `query-definition`).
+ */
+const STATEMENT_RELATIONS: readonly Relation[] = [
+  ...RELATIONS_WITH_FULL_GRAMMAR,
+  ADDITIONAL_RELATIONS.Means,
 ];
+
+function longestAliasLength(relation: Relation): number {
+  return relationAliasesLongestFirst(relation).reduce(
+    (longest, alias) => Math.max(longest, alias.length),
+    0,
+  );
+}
+
+/**
+ * `意思是`(3), `指的是`(3), `拥有`(2), `具备`(2), `能够`(2)... all before
+ * `是`(1), `有`(1), `会`(1), `在`(1).
+ */
+const STATEMENT_RELATIONS_BY_ALIAS_LENGTH: readonly Relation[] = Object.freeze(
+  [...STATEMENT_RELATIONS].sort(
+    (left, right) => longestAliasLength(right) - longestAliasLength(left),
+  ),
+);
 
 export const defaultPatterns: readonly GrammarPattern[] = [
-  createLocatePattern(),
+  createLocatePattern(relationAliasesLongestFirst(CoreRelations.LocatedIn)),
   ...RELATIONS_WITH_FULL_GRAMMAR.map(createWhyPattern),
   ...RELATIONS_WITH_FULL_GRAMMAR.map(createVerifyPattern),
-  ...RELATIONS_WITH_FULL_GRAMMAR.map(createObjectOfPattern),
-  ...ADDITIONAL_STATEMENT_PATTERNS,
   ...RELATIONS_WITH_FULL_GRAMMAR.map((relation) =>
-    createStatementPattern(relation),
+    // Open queries ("A <relation>什么") take the canonical word and the
+    // unambiguous longer aliases; a leading `是` alias would collide with the
+    // interrogative forms.
+    createObjectOfPattern(relation, relationAliasesForUnambiguousQuery(relation)),
+  ),
+  ...STATEMENT_RELATIONS_BY_ALIAS_LENGTH.map((relation) =>
+    createStatementPattern(relation, relationAliasesLongestFirst(relation)),
   ),
 ];

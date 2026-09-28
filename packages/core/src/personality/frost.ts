@@ -1,17 +1,3 @@
-/**
- * Frost (霜蓝) — the default persona for a furry-community-facing AI.
- *
- * Frost is temperate, friendly, reliable — a companion in the fandom rather
- * than a customer-service bot. Technical/factual content stays plain and
- * accurate; only the FRAMING around it (opener/closer, at most one emoji)
- * carries Frost's voice.
- *
- * CRITICAL INVARIANT: every factual render function below embeds the incoming
- * factual fields (`result.explanation`, `record.subject/relation/object`)
- * VERBATIM. Parse failures are different: `failure.reason` remains internal
- * diagnostic data and is intentionally converted into a natural fallback
- * before anything reaches the user.
- */
 import type {
   ClarificationPlan,
   DialogueTurnContext,
@@ -23,6 +9,8 @@ import type {
   ReasoningResult,
   ResponseContext,
   ResponsePlan,
+  LearnedFactResult,
+  LearnedOutcome,
 } from "@/types";
 import { MemoryKeys } from "@/types";
 import { compose } from "./textCompose";
@@ -68,6 +56,14 @@ import {
   THANKS_LINES,
   UNKNOWN_INPUT_CLOSERS,
   UNKNOWN_INPUT_OPENERS,
+  LEARNED_KNOWN_CLOSERS,
+  LEARNED_KNOWN_OPENERS,
+  LEARNED_MANY_OPENER,
+  LEARNED_PREFIX,
+  LEARNED_KNOWN_PREFIX,
+  LEARNED_RELATED_NOTE,
+  LEARNED_RELATED_OPENERS,
+  LEARNED_RELATED_PREFIX,
 } from "./frostPhrases";
 
 const FROST_ACCENT_OPTIONS: readonly string[] = [
@@ -356,15 +352,73 @@ function renderDialogue(turn: DialogueTurnContext): string {
   }
 }
 
-function renderLearned(record: KnowledgeRecord): string {
-  const seed = `${record.subject}:${record.relation}:${record.object}`;
-  const opener = pickBySeed(LEARNED_OPENERS, seed);
-  const closer = pickBySeed(LEARNED_CLOSERS, `${seed}:closer`);
-
+function factLine(record: KnowledgeRecord): string {
   const negation = record.negated ? "不" : "";
-  const fact = `${record.subject} ${negation}${record.relation} ${record.object}`;
+  return `${record.subject} ${negation}${record.relation} ${record.object}`;
+}
 
-  return [opener, fact, closer].join("\n\n");
+/**
+ * Answer a teaching turn truthfully about what actually happened.
+ *
+ * Frost may choose any wording here, but it may not claim a change that did not
+ * happen: a fact already in the knowledge base is NOT "记下了", and a fact that
+ * sits alongside facts that are still stored must say that instead of claiming
+ * an update that never happened.
+ * `outcome` is decided by the engine from the store, so this is framing, never
+ * re-derivation.
+ */
+function renderLearned(
+  record: KnowledgeRecord,
+  outcome: LearnedOutcome,
+  relatedExisting: readonly KnowledgeRecord[],
+): string {
+  const seed = `${record.subject}:${record.relation}:${record.object}:${outcome}`;
+  const fact = factLine(record);
+
+  if (outcome === "already-known") {
+    return [
+      pickBySeed(LEARNED_KNOWN_OPENERS, seed),
+      fact,
+      pickBySeed(LEARNED_KNOWN_CLOSERS, `${seed}:closer`),
+    ].join("\n\n");
+  }
+  if (outcome === "related-known") {
+    // The earlier facts are still stored, so they are presented as retained
+    // company for the new one -- never as something it replaced.
+    const existing = relatedExisting.map(factLine).join("；");
+    return [
+      pickBySeed(LEARNED_RELATED_OPENERS, seed),
+      fact,
+      ...(existing.length === 0 ? [] : [`${LEARNED_RELATED_NOTE}${existing}`]),
+      pickBySeed(LEARNED_CLOSERS, `${seed}:closer`),
+    ].join("\n\n");
+  }
+  return [
+    pickBySeed(LEARNED_OPENERS, seed),
+    fact,
+    pickBySeed(LEARNED_CLOSERS, `${seed}:closer`),
+  ].join("\n\n");
+}
+
+/**
+ * One short line per fact, reusing the single-fact wording rules so a
+ * multi-fact reply cannot claim something a single-fact reply would not.
+ * Deliberately terse: many openers/closers around four facts would bury the
+ * facts themselves.
+ */
+function renderLearnedMany(results: readonly LearnedFactResult[]): string {
+  const lines = results.map((entry) => {
+    const fact = factLine(entry.record);
+    if (entry.outcome === "already-known") return `${LEARNED_KNOWN_PREFIX}${fact}`;
+    if (entry.outcome === "related-known") {
+      const existing = (entry.relatedExisting ?? []).map(factLine).join("；");
+      return existing.length === 0
+        ? `${LEARNED_RELATED_PREFIX}${fact}`
+        : `${LEARNED_RELATED_PREFIX}${fact}（${LEARNED_RELATED_NOTE}${existing}）`;
+    }
+    return `${LEARNED_PREFIX}${fact}`;
+  });
+  return [LEARNED_MANY_OPENER, ...lines].join("\n");
 }
 
 function renderUnknownInput(failure: ParseFailure): string {
@@ -563,7 +617,13 @@ export const FrostPersonality: PersonalityProfile = {
       case "clarification":
         return renderClarification(context.plan);
       case "learned":
-        return renderLearned(context.record);
+        return renderLearned(
+          context.record,
+          context.outcome ?? "added",
+          context.relatedExisting ?? [],
+        );
+      case "learned-many":
+        return renderLearnedMany(context.results);
       case "unknown-input":
         return renderUnknownInput(context.failure);
       case "greeting":

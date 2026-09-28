@@ -171,5 +171,67 @@ describe("InMemoryKnowledgeStore", () => {
       expect(store.all().find((r) => r.id === record.id)?.confidence).toBe(1);
       expect(store.match({ subject: "苏格拉底" })).toHaveLength(1);
     });
+
+    it("deduplicates by fact identity, not by id", () => {
+      // A restored snapshot is untrusted input: the same fact may arrive under
+      // two ids (two devices, or a legacy import with its own ids).
+      store.addMany([
+        { ...catIsMammal, id: "device-a", confidence: 1, source: "user", createdAt: "2026-01-01T00:00:00.000Z" },
+        { ...catIsMammal, id: "device-b", confidence: 1, source: "user", createdAt: "2026-01-02T00:00:00.000Z" },
+      ]);
+
+      expect(store.all()).toHaveLength(1);
+      expect(store.match({ subject: "猫" })).toHaveLength(1);
+    });
+
+    it("keeps negated and non-negated forms of the same triple distinct", () => {
+      store.addMany([
+        { ...catIsMammal, id: "positive", confidence: 1, source: "user", createdAt: "2026-01-01T00:00:00.000Z" },
+        { ...catIsMammal, id: "negative", negated: true, confidence: 1, source: "user", createdAt: "2026-01-01T00:00:00.000Z" },
+      ]);
+
+      expect(store.all()).toHaveLength(2);
+      expect(store.match({ subject: "猫" })).toHaveLength(2);
+    });
+
+    it("leaves no ghost record behind when a duplicate-triple snapshot is removed", () => {
+      store.addMany([
+        { ...catIsMammal, id: "device-a", confidence: 1, source: "user", createdAt: "2026-01-01T00:00:00.000Z" },
+        { ...catIsMammal, id: "device-b", confidence: 1, source: "user", createdAt: "2026-01-02T00:00:00.000Z" },
+      ]);
+
+      store.remove("device-a");
+
+      expect(store.all()).toHaveLength(0);
+      expect(store.has(catIsMammal)).toBe(false);
+      expect(store.match({})).toEqual([]);
+      expect(store.match({ subject: "猫" })).toEqual([]);
+      expect(store.match({ relation: CoreRelations.IsA })).toEqual([]);
+    });
+
+    it("stays idempotent when the same snapshot is restored twice", () => {
+      const snapshot = [
+        { ...catIsMammal, id: "seed-a", confidence: 1, source: "seed" as const, createdAt: "2026-01-01T00:00:00.000Z" },
+        { ...penguinCannotFly, id: "seed-b", confidence: 1, source: "seed" as const, createdAt: "2026-01-01T00:00:00.000Z" },
+      ];
+      store.addMany(snapshot);
+      store.addMany(snapshot);
+
+      expect(store.all()).toHaveLength(2);
+      expect(store.match({ subject: "企鹅" })).toHaveLength(1);
+    });
+
+    it("keeps the fact queryable after removing the record that owns it", () => {
+      // The triple lookup must be released with its owner, otherwise `has()`
+      // would report a fact that is no longer in the store.
+      store.addMany([
+        { ...catIsMammal, id: "owner", confidence: 1, source: "user", createdAt: "2026-01-01T00:00:00.000Z" },
+      ]);
+
+      store.remove("owner");
+
+      expect(store.has(catIsMammal)).toBe(false);
+      expect(store.match({ subject: "猫" })).toEqual([]);
+    });
   });
 });

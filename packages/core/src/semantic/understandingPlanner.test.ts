@@ -189,20 +189,32 @@ describe("planUnderstanding representative decisions", () => {
     });
   });
 
-  it("preserves a negated statement while rejecting positive write execution", () => {
+  it("accepts a complete negated statement as a storable fact (B.7)", () => {
+    // `猫不是狗` asserts the proposition {猫, 是, 狗, negated}. Refusing every
+    // negation made `KnowledgeRecord.negated` unreachable on the write path, so
+    // a complete negated statement is now accepted while every incomplete or
+    // unsafe negation stays rejected (see the negation-guard cases below).
     const decision = decisionFor("猫不是狗");
 
-    expect(decision.kind).toBe("reject-side-effect");
-    if (decision.kind === "reject-side-effect") {
-      expect(decision.rejectedCandidate.result).toMatchObject({
+    expect(decision.kind).toBe("accept");
+    if (decision.kind === "accept") {
+      expect(decision.selectedCandidate.result).toMatchObject({
         type: "statement",
         subject: "猫",
         object: "狗",
         negated: true,
       });
-      expect(decision.requiredEvidence).toContain(
-        "non-negated-assertion",
-      );
+    }
+  });
+
+  it("still rejects a negated statement about the user themselves", () => {
+    // A first-person denial is not a world fact, and a denial is a weak way to
+    // learn what is true; self-descriptions stay Memory's concern.
+    const decision = decisionFor("我不是小明");
+
+    expect(decision.kind).toBe("reject-side-effect");
+    if (decision.kind === "reject-side-effect") {
+      expect(decision.requiredEvidence).toContain("non-negated-assertion");
     }
   });
 

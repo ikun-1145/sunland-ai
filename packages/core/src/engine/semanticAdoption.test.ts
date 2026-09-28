@@ -120,8 +120,13 @@ describe("SunlandEngine Semantic Understanding Stage 8.5A", () => {
     );
 
     expect(engine.respond("鸟有什么")).toContain("翅膀");
+    // `有` gained object-of/verify/why grammar from the shared relation
+    // vocabulary, so Legacy now parses this input directly instead of
+    // returning `unknown` (that is the A.3 fix). Semantic still owns the
+    // resolved candidate, so the adapter kind stays `adopt` -- only the Legacy
+    // reading changed.
     expect(engine.getLastSemanticShadow()).toMatchObject({
-      legacyType: "unknown",
+      legacyType: "query",
       selectedCandidateType: "query",
       adapterKind: "adopt",
       semanticAdopted: true,
@@ -447,14 +452,39 @@ describe("SunlandEngine Semantic Understanding Stage 8.5A", () => {
     });
   });
 
-  it("does not let passive fallback persist a negated Knowledge statement", () => {
+  it("persists a complete negated Knowledge statement (B.7)", () => {
+    // A complete negated statement is a first-class fact. Before B.7 every
+    // negation was refused, which made `KnowledgeRecord.negated` unreachable
+    // from the write path entirely.
     const engine = createSunlandEngine({
       semanticMode: "passive",
       semanticDebug: true,
     });
 
     const reply = engine.respond("猫不是狗");
+    expect(
+      engine.knowledgeStore
+        .all()
+        .map((record) => `${record.subject}|${record.relation}|${record.object}|${record.negated}`),
+    ).toEqual(["猫|是|狗|true"]);
+    expect(reply).not.toMatch(INTERNAL_TERMS);
+    expect(engine.getLastSemanticShadow()).toMatchObject({
+      decisionType: "accept",
+      // A knowledge write always completes on the Legacy path, so Semantic
+      // confirms it rather than executing it.
+      semanticAdopted: false,
+    });
+  });
+
+  it("still refuses to persist a first-person denial", () => {
+    const engine = createSunlandEngine({
+      semanticMode: "passive",
+      semanticDebug: true,
+    });
+
+    const reply = engine.respond("我不是小明");
     expect(engine.knowledgeStore.all()).toEqual([]);
+    expect(engine.memory.list()).toEqual([]);
     expect(reply).not.toMatch(INTERNAL_TERMS);
     expect(engine.getLastSemanticShadow()).toMatchObject({
       decisionType: "reject-side-effect",
